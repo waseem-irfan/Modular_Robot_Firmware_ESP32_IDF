@@ -8,5 +8,10 @@
 #define SERVO_PIN       GPIO_NUM_5
 
 void app_main(){
-    
+    setup_pwm(SERVO_PIN);
+
+    while(1){
+        set_servo_angle(90);
+        vTaskDelay(pdMS_TO_TICKS(5000));
+    }
 }
