@@ -11,7 +11,28 @@ void app_main(){
     setup_pwm(SERVO_PIN);
 
     while(1){
-        set_servo_angle(90);
-        vTaskDelay(pdMS_TO_TICKS(5000));
+        set_servo_speed(0);   // Stop
+        vTaskDelay(pdMS_TO_TICKS(2000));
+
+        set_servo_speed(25);  // Slow forward
+        vTaskDelay(pdMS_TO_TICKS(2000));
+
+        set_servo_speed(50);  // Medium forward
+        vTaskDelay(pdMS_TO_TICKS(2000));
+
+        set_servo_speed(100); // Fast forward
+        vTaskDelay(pdMS_TO_TICKS(2000));
+
+        set_servo_speed(-100); // Fast backward
+        vTaskDelay(pdMS_TO_TICKS(2000));
+
+        set_servo_speed(-50); // Medium backward
+        vTaskDelay(pdMS_TO_TICKS(2000));
+
+        set_servo_speed(-25);  // Slow Backward
+        vTaskDelay(pdMS_TO_TICKS(2000));
+
+        set_servo_speed(0);   // Stop
+        vTaskDelay(pdMS_TO_TICKS(2000));
     }
 }

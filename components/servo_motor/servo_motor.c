@@ -32,3 +32,16 @@ void set_servo_angle(int angle)
     ledc_set_duty(SPEED_MODE, CHANNEL, duty);
     ledc_update_duty(SPEED_MODE, CHANNEL);
 }
+
+void set_servo_speed(int speed) 
+{
+    int pulsewidth = 1500 + (speed * 4); // Scale speed to PWM range
+
+    // Clamp pulse width to valid range (1120µs to 1920µs)
+    if (pulsewidth > SERVO_MAX_PULSEWIDTH) pulsewidth = SERVO_MAX_PULSEWIDTH;
+    if (pulsewidth < SERVO_MIN_PULSEWIDTH) pulsewidth = SERVO_MIN_PULSEWIDTH;
+
+    int duty = (pulsewidth * 8192) / 20000; // Convert pulse width to duty cycle
+    ledc_set_duty(SPEED_MODE, CHANNEL, duty);
+    ledc_update_duty(SPEED_MODE, CHANNEL);
+}
