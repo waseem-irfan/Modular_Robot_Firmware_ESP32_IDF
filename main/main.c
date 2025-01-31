@@ -5,10 +5,12 @@
 #include "esp_err.h"
 #include "servo_motor.h"
 
-#define SERVO_PIN       GPIO_NUM_5
+#define SERVO_PIN_1       GPIO_NUM_5
+#define SERVO_PIN_2       GPIO_NUM_18
 
 void app_main(){
-    setup_pwm(SERVO_PIN);
+    setup_pwm(SERVO_PIN_1);
+    setup_pwm(SERVO_PIN_2);
 
     while(1){
         set_servo_speed(0);   // Stop

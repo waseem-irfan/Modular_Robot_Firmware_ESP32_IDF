@@ -18,4 +18,4 @@ void setup_pwm(uint8_t SERVO_PIN);
 void set_servo_angle(int angle);
 
 // continous servo respond to PWM differently so we can control it using speed and direction
-void set_servo_speed(int speed);
+void set_servo_speed(int speed, ledc_channel_t channel);
