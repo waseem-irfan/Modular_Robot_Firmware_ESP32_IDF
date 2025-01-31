@@ -5,36 +5,17 @@
 #include "esp_err.h"
 #include "servo_motor.h"
 
-#define SERVO_PIN_1       GPIO_NUM_5
-#define SERVO_PIN_2       GPIO_NUM_18
+#define SERVO1_PIN       GPIO_NUM_5
+#define SERVO2_PIN       GPIO_NUM_18
 
 void app_main(){
-    setup_pwm(SERVO_PIN_1);
-    setup_pwm(SERVO_PIN_2);
+    setup_pwm(SERVO1_PIN, LEDC_CHANNEL_0);
+    setup_pwm(SERVO2_PIN, LEDC_CHANNEL_1);
+    vTaskDelay(pdMS_TO_TICKS(120000));
 
-    while(1){
-        set_servo_speed(0);   // Stop
-        vTaskDelay(pdMS_TO_TICKS(2000));
-
-        set_servo_speed(25);  // Slow forward
-        vTaskDelay(pdMS_TO_TICKS(2000));
-
-        set_servo_speed(50);  // Medium forward
-        vTaskDelay(pdMS_TO_TICKS(2000));
-
-        set_servo_speed(100); // Fast forward
-        vTaskDelay(pdMS_TO_TICKS(2000));
-
-        set_servo_speed(-100); // Fast backward
-        vTaskDelay(pdMS_TO_TICKS(2000));
-
-        set_servo_speed(-50); // Medium backward
-        vTaskDelay(pdMS_TO_TICKS(2000));
-
-        set_servo_speed(-25);  // Slow Backward
-        vTaskDelay(pdMS_TO_TICKS(2000));
-
-        set_servo_speed(0);   // Stop
-        vTaskDelay(pdMS_TO_TICKS(2000));
-    }
+    set_servo_speed(+100, LEDC_CHANNEL_0);  
+    set_servo_speed(-100, LEDC_CHANNEL_1);
+    vTaskDelay(pdMS_TO_TICKS(10000));
+    set_servo_speed(0, LEDC_CHANNEL_0);  
+    set_servo_speed(0, LEDC_CHANNEL_1);
 }

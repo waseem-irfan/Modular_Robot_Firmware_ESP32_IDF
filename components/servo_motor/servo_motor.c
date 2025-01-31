@@ -1,6 +1,6 @@
 #include "servo_motor.h"
 
-void setup_pwm(uint8_t SERVO_PIN) {
+void setup_pwm(uint8_t SERVO_PIN, ledc_channel_t channel) {
     // Configure the LEDC timer
     ledc_timer_config_t ledc_timer = {
         .speed_mode       = SPEED_MODE,
@@ -14,7 +14,7 @@ void setup_pwm(uint8_t SERVO_PIN) {
     // Configure the LEDC channel
     ledc_channel_config_t ledc_channel = {
         .speed_mode     = SPEED_MODE,
-        .channel        = CHANNEL,
+        .channel        = channel,
         .timer_sel      = TIMER_NUM,
         .intr_type      = INTR_TYPE,
         .gpio_num       = SERVO_PIN,

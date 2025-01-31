@@ -13,7 +13,7 @@
 #define SERVO_MAX_PULSEWIDTH 1920  // Maximum pulse width in microsecond
 #define SERVO_MAX_DEGREE     90    // Maximum angle in degree up to which servo can rotate
 
-void setup_pwm(uint8_t SERVO_PIN);
+void setup_pwm(uint8_t SERVO_PIN, ledc_channel_t channel);
 
 void set_servo_angle(int angle);
 
