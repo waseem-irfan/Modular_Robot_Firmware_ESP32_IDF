@@ -9,6 +9,7 @@
 #include "esp_now.h"
 #include "nvs_flash.h"
 #include "esp_mac.h"
+#include <stdlib.h>
 
 // #include "wifi_manager.h"
 #include "protocol_examples_common.h"
@@ -47,6 +48,12 @@ void cb_connection_ok(void *pvParameter){
 	ESP_LOGI(TAG, "I have a connection and my IP is %s!", str_ip);
 }
 
+typedef struct
+{
+    float accel_x, accel_y, accel_z;
+    float gyro_x, gyro_y, gyro_z;
+} mpu6050_data_t;
+
 char *mac_to_str(char *my_mac_str, uint8_t *my_mac){
 	sprintf(my_mac_str,"%02x%02x%02x%02x%02x%02x",my_mac[0],my_mac[1],my_mac[2],my_mac[3],my_mac[4],my_mac[5]);
 	return my_mac_str;
@@ -68,8 +75,15 @@ void on_sent(const uint8_t *mac_addr, esp_now_send_status_t status)
 
 void on_receive(const esp_now_recv_info_t *esp_now_info, const uint8_t *data, int data_len)
 {
-  ESP_LOGI(TAG, "got message from " MACSTR, MAC2STR(esp_now_info->src_addr));
-  printf("message: %.*s\n", data_len, data);
+    if (data_len == sizeof(mpu6050_data_t))
+    {
+        mpu6050_data_t received_data;
+        memcpy(&received_data, data, sizeof(mpu6050_data_t));
+
+        ESP_LOGI(ESP_NOW_TAG, "Received MPU6050 Data:");
+        ESP_LOGI(ESP_NOW_TAG, "Accel: X=%.2fg, Y=%.2fg, Z=%.2fg", received_data.accel_x, received_data.accel_y, received_data.accel_z);
+        ESP_LOGI(ESP_NOW_TAG, "Gyro: X=%.2f°/s, Y=%.2f°/s, Z=%.2f°/s", received_data.gyro_x, received_data.gyro_y, received_data.gyro_z);
+    }
 }
 
 void app_main()
@@ -99,21 +113,25 @@ void app_main()
   	ESP_ERROR_CHECK(esp_now_register_send_cb(on_sent));
   	ESP_ERROR_CHECK(esp_now_register_recv_cb(on_receive));
 
-	esp_now_peer_info_t peer;
-  	memset(&peer, 0, sizeof(esp_now_peer_info_t));
-  	memcpy(peer.peer_addr, peer_mac, 6);
+	   while (1)
+    {
+        mpu6050_data_t sensor_data;
 
-  	esp_now_add_peer(&peer);
+        // Simulated MPU6050 Data (Random but realistic values)
+        sensor_data.accel_x = 0.10 + ((rand() % 20) / 100.0);  // ±0.20g variation
+        sensor_data.accel_y = -0.05 + ((rand() % 20) / 100.0); // ±0.20g variation
+        sensor_data.accel_z = 9.81 + ((rand() % 10) / 100.0);  // ±0.10g variation
+        sensor_data.gyro_x = 0.01 + ((rand() % 10) / 100.0);   // ±0.10°/s variation
+        sensor_data.gyro_y = -0.01 + ((rand() % 10) / 100.0);  // ±0.10°/s variation
+        sensor_data.gyro_z = 0.02 + ((rand() % 10) / 100.0);   // ±0.10°/s variation
 
-	char send_buffer[250];
+        ESP_LOGI(ESP_NOW_TAG, "Simulated MPU6050 Data - Accel: X=%.2fg, Y=%.2fg, Z=%.2fg, Gyro: X=%.2f°/s, Y=%.2f°/s, Z=%.2f°/s",
+                 sensor_data.accel_x, sensor_data.accel_y, sensor_data.accel_z,
+                 sensor_data.gyro_x, sensor_data.gyro_y, sensor_data.gyro_z);
 
-  	for (int i = 0; i < 200; i++)
-  	{
-    sprintf(send_buffer, "Hello from %s message %d", my_mac_str, i);
-    ESP_ERROR_CHECK(esp_now_send(NULL, (uint8_t *)send_buffer, strlen(send_buffer)));
-    vTaskDelay(pdMS_TO_TICKS(1000));
-  	}
-	ESP_ERROR_CHECK(esp_now_deinit());
-	ESP_ERROR_CHECK(example_disconnect());
+        ESP_ERROR_CHECK(esp_now_send(peer_mac, (uint8_t *)&sensor_data, sizeof(sensor_data)));
+
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
 
 }
