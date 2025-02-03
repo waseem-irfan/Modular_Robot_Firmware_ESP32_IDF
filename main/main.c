@@ -1,21 +1,51 @@
 #include <stdio.h>
+#include <string.h>
+#include <esp_wifi.h>
+#include <esp_netif.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "driver/gpio.h"
-#include "esp_err.h"
-#include "servo_motor.h"
+#include "esp_system.h"
+#include "esp_log.h"
 
-#define SERVO1_PIN       GPIO_NUM_5
-#define SERVO2_PIN       GPIO_NUM_18
+#include "wifi_manager.h"
 
-void app_main(){
-    setup_pwm(SERVO1_PIN, LEDC_CHANNEL_0);
-    setup_pwm(SERVO2_PIN, LEDC_CHANNEL_1);
-    vTaskDelay(pdMS_TO_TICKS(120000));
+/* @brief tag used for ESP serial console messages */
+static const char TAG[] = "main";
 
-    set_servo_speed(+100, LEDC_CHANNEL_0);  
-    set_servo_speed(-100, LEDC_CHANNEL_1);
-    vTaskDelay(pdMS_TO_TICKS(10000));
-    set_servo_speed(0, LEDC_CHANNEL_0);  
-    set_servo_speed(0, LEDC_CHANNEL_1);
+/**
+ * @brief RTOS task that periodically prints the heap memory available.
+ * @note Pure debug information, should not be ever started on production code! This is an example on how you can integrate your code with wifi-manager
+ */
+void monitoring_task(void *pvParameter)
+{
+	for(;;){
+		ESP_LOGI(TAG, "free heap: %lu",esp_get_free_heap_size());
+		vTaskDelay( pdMS_TO_TICKS(10000) );
+	}
+}
+
+
+/**
+ * @brief this is an exemple of a callback that you can setup in your own app to get notified of wifi manager event.
+ */
+void cb_connection_ok(void *pvParameter){
+	ip_event_got_ip_t* param = (ip_event_got_ip_t*)pvParameter;
+
+	/* transform IP to human readable string */
+	char str_ip[16];
+	esp_ip4addr_ntoa(&param->ip_info.ip, str_ip, IP4ADDR_STRLEN_MAX);
+
+	ESP_LOGI(TAG, "I have a connection and my IP is %s!", str_ip);
+}
+
+void app_main()
+{
+	/* start the wifi manager */
+	wifi_manager_start();
+
+	/* register a callback as an example to how you can integrate your code with the wifi manager */
+	wifi_manager_set_callback(WM_EVENT_STA_GOT_IP, &cb_connection_ok);
+
+	/* your code should go here. Here we simply create a task on core 2 that monitors free heap memory */
+	xTaskCreatePinnedToCore(&monitoring_task, "monitoring_task", 2048, NULL, 1, NULL, 1);
 }
