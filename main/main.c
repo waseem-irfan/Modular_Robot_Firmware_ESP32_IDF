@@ -13,9 +13,9 @@ void app_main(){
     setup_pwm(SERVO2_PIN, LEDC_CHANNEL_1);
     vTaskDelay(pdMS_TO_TICKS(120000));
 
-    set_servo_speed(+100, LEDC_CHANNEL_0);  
-    set_servo_speed(-100, LEDC_CHANNEL_1);
-    vTaskDelay(pdMS_TO_TICKS(10000));
+    set_servo_speed(+200, LEDC_CHANNEL_0);  
+    set_servo_speed(-200, LEDC_CHANNEL_1);
+    vTaskDelay(pdMS_TO_TICKS(30000));
     set_servo_speed(0, LEDC_CHANNEL_0);  
     set_servo_speed(0, LEDC_CHANNEL_1);
 }
