@@ -4,5 +4,5 @@ set(srcs
 
 # "glcdfont.c" defined but not used font
 idf_component_register(SRCS ${srcs}
-    INCLUDE_DIRS "include"
+    INCLUDE_DIRS "inc"
     REQUIRES driver)
