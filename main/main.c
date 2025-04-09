@@ -1,51 +1,26 @@
 #include <stdio.h>
-#include <string.h>
-#include <esp_wifi.h>
-#include <esp_netif.h>
+#include "motor.h"
+#include "pulse.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "esp_system.h"
-#include "esp_log.h"
 
-#include "wifi_manager.h"
+void app_main(void){
+    bdc_motor_handle_t motor = start_motor(19, 21, 25000);
+    pcnt_unit_handle_t pcnt_unit = setup_pcnt_encoder(5, 18, 2200, -2200);
+    
+    // Start the motor at desired speed and direction
+    set_speed_direction(motor, 200, true);
 
-/* @brief tag used for ESP serial console messages */
-static const char TAG[] = "main";
+    while (1) {
+        int pulse = get_encoder_pulses(pcnt_unit);  // Read encoder count
+        printf("Pulse: %d\n", pulse); 
+        // vTaskDelay(pdMS_TO_TICKS(100));  // Read every 100 ms
 
-/**
- * @brief RTOS task that periodically prints the heap memory available.
- * @note Pure debug information, should not be ever started on production code! This is an example on how you can integrate your code with wifi-manager
- */
-void monitoring_task(void *pvParameter)
-{
-	for(;;){
-		ESP_LOGI(TAG, "free heap: %lu",esp_get_free_heap_size());
-		vTaskDelay( pdMS_TO_TICKS(10000) );
-	}
-}
-
-
-/**
- * @brief this is an exemple of a callback that you can setup in your own app to get notified of wifi manager event.
- */
-void cb_connection_ok(void *pvParameter){
-	ip_event_got_ip_t* param = (ip_event_got_ip_t*)pvParameter;
-
-	/* transform IP to human readable string */
-	char str_ip[16];
-	esp_ip4addr_ntoa(&param->ip_info.ip, str_ip, IP4ADDR_STRLEN_MAX);
-
-	ESP_LOGI(TAG, "I have a connection and my IP is %s!", str_ip);
-}
-
-void app_main()
-{
-	/* start the wifi manager */
-	wifi_manager_start();
-
-	/* register a callback as an example to how you can integrate your code with the wifi manager */
-	wifi_manager_set_callback(WM_EVENT_STA_GOT_IP, &cb_connection_ok);
-
-	/* your code should go here. Here we simply create a task on core 2 that monitors free heap memory */
-	// xTaskCreatePinnedToCore(&monitoring_task, "monitoring_task", 2048, NULL, 1, NULL, 1);
+        // Optional stop condition:
+        if (pulse >= 2195) {
+            set_speed_direction(motor, 0, true);  // Stop motor
+            printf("Target reached: %d pulses\n", pulse);
+            break;
+        }
+    }
 }
