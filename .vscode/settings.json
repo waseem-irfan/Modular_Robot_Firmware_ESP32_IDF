@@ -8,6 +8,9 @@
     "idf.toolsPathWin": "C:\\Espressif",
     "files.associations": {
         "enc_motor.h": "c",
-        "gpio.h": "c"
+        "gpio.h": "c",
+        "unity.h": "c",
+        "motor.h": "c",
+        "mpu6050_rpy.h": "c"
     }
 }
