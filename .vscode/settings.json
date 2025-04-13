@@ -11,6 +11,11 @@
         "gpio.h": "c",
         "unity.h": "c",
         "motor.h": "c",
-        "mpu6050_rpy.h": "c"
+        "mpu6050_rpy.h": "c",
+        "pid_control.h": "c",
+        "pid_ctrl.h": "c",
+        "freertos.h": "c",
+        "stdbool.h": "c",
+        "pulse.h": "c"
     }
 }

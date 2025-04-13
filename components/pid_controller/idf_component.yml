@@ -1,6 +1,6 @@
 ## IDF Component Manager Manifest File
 dependencies:
-  espressif/bdc_motor: "^0.1.0"
+  espressif/pid_ctrl: "^0.2.0"
   ## Required IDF version
   idf:
     version: ">=4.1.0"
