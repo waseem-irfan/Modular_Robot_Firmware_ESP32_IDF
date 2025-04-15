@@ -10,7 +10,7 @@
 
 #define TARGET_POSITION  15000 // Desired encoder pulses
 #define PID_INTERVAL_MS  10   // 10 ms control loop
-#define POSITION_DEADBAND 3
+#define POSITION_DEADBAND 2
 
 static const char *PID_TAG = "pid_ctrl";
 
