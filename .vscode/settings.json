@@ -16,6 +16,7 @@
         "pid_ctrl.h": "c",
         "freertos.h": "c",
         "stdbool.h": "c",
-        "pulse.h": "c"
+        "pulse.h": "c",
+        "blink.h": "c"
     }
 }
