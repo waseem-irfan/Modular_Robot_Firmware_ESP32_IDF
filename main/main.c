@@ -1,24 +1,40 @@
 #include <stdio.h>
-#include "pid_control.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-// #include "mpu6050_rpy.h"
+#include "motor.h"
 
-pid_ctrl_block_handle_t pid;
-pcnt_unit_handle_t pcnt;
-bdc_motor_handle_t motor;
+bdc_motor_handle_t mtr1;
+bdc_motor_handle_t mtr2;
+uint32_t speed = 400;
 
+void move_forward(){
+    set_speed_direction(mtr1, speed, 1);
+    set_speed_direction(mtr2, speed, 1);
+    // vTaskDelay(pdMS_TO_TICKS(100));
+}
+
+void move_backward(){
+    set_speed_direction(mtr1, speed, 0);
+    set_speed_direction(mtr2, speed, 0);
+}
+
+void move_left(){
+    set_speed_direction(mtr1, speed, 1);
+    set_speed_direction(mtr2, speed, 0);
+}
+
+void move_right(){
+    set_speed_direction(mtr1, speed, 0);
+    set_speed_direction(mtr2, speed, 1);
+}
 void app_main(void){
-    // mpu6050_init();
+    mtr1 = start_motor(GPIO_NUM_32, GPIO_NUM_13, 25000);
+    mtr2 = start_motor(GPIO_NUM_2, GPIO_NUM_4, 25000);
+    vTaskDelay(pdMS_TO_TICKS(10000));
+    while(1){
+        move_backward();
+            vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    
 
-    pcnt = setup_pcnt_encoder(GPIO_NUM_5, GPIO_NUM_18, 15000, -15000);
-
-    // 2. Initialize motor
-    motor = start_motor(GPIO_NUM_19, GPIO_NUM_21, 25000); // 1kHz PWM
-
-    // 3. Initialize PID controller (already shown above)
-    ESP_ERROR_CHECK(pid_cfg_init(1.1f, 0.33f, 0.02f));
-    // 4. Create control task
-    xTaskCreate(control_loop_task, "pid_control", 4096, NULL, 5, NULL);
-    // xTaskCreate(mpu6050_rpy_task,"MPU_6050 Task", 1024*2, NULL, 2, NULL);
 }
