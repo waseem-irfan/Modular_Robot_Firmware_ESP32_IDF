@@ -1,8 +1,13 @@
 #include "dw3000.h"
 
+extern "C" {
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
+#include "wifi_connect.h"
+#include "nvs_flash.h"
+#include "mpu6050_rpy.h"
+}
 
 #define APP_NAME "SS TWR INIT v1.0"
 
@@ -154,8 +159,14 @@ while(1){
 extern "C" {void app_main(void);}
 
 void app_main(void) {
+/*************************************** WIFI INITIALIZATION *******************************/
 
-  // UWB Initialization
+ESP_ERROR_CHECK(nvs_flash_init());
+wifi_connect_init();
+ESP_ERROR_CHECK(wifi_connect_sta("Signum Signal", "ntgl5273", 10000));
+
+/************************************** UWB INITIALIZATION ***************************/
+
   UART_init();
   test_run_info((unsigned char *)APP_NAME);
   /* Configure SPI rate, DW3000 supports up to 38 MHz */
@@ -202,8 +213,9 @@ void app_main(void) {
     /* Next can enable TX/RX states output on GPIOs 5 and 6 to help debug, and also TX/RX LEDs
      * Note, in real low power applications the LEDs should not be used. */
     dwt_setlnapamode(DWT_LNA_ENABLE | DWT_PA_ENABLE);
-   
     
+    xTaskCreatePinnedToCore(UWB_task, "UWB Task", 1024*2, NULL, 2, NULL, 1);
+    // xTaskCreatePinnedToCore(mpu6050_rpy_task, "MPU6050 Task", 1024*2, NULL, 2, NULL, 1);
 }
 
 
