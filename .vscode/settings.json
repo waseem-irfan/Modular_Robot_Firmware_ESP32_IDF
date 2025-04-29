@@ -5,5 +5,14 @@
         "board/esp32-wrover-kit-3.3v.cfg"
     ],
     "idf.portWin": "COM3",
-    "idf.toolsPathWin": "C:\\Espressif"
+    "idf.toolsPathWin": "C:\\Espressif",
+    "files.associations": {
+        "task.h": "c",
+        "freertos.h": "c",
+        "stdio.h": "c",
+        "servo_motor.h": "c",
+        "ledc.h": "c",
+        "esp_err.h": "c",
+        "esp_intr_alloc.h": "c"
+    }
 }
