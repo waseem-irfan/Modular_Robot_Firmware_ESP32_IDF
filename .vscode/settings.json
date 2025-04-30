@@ -17,6 +17,7 @@
         "freertos.h": "c",
         "stdbool.h": "c",
         "pulse.h": "c",
-        "blink.h": "c"
+        "blink.h": "c",
+        "mpu6050.h": "c"
     }
 }

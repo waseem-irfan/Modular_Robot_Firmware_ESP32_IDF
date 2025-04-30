@@ -1,36 +1,39 @@
 #include "dw3000.h"
 
-extern "C" {
+extern "C"
+{
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 #include "wifi_connect.h"
 #include "nvs_flash.h"
 #include "mpu6050_rpy.h"
+#include "unity.h"
 }
-
+SemaphoreHandle_t mutex;
+const char *MPU_TAG = "mpu6050_orientation";
 #define APP_NAME "SS TWR INIT v1.0"
 
 // connection pins
 const uint8_t PIN_RST = 26; // reset pin
-const uint8_t PIN_IRQ = 4; // irq pin
-const uint8_t PIN_SS = 5; // spi select pin
+const uint8_t PIN_IRQ = 4;  // irq pin
+const uint8_t PIN_SS = 5;   // spi select pin
 
 /* Default communication configuration. We use default non-STS DW mode. */
 static dwt_config_t config = {
-        5,               /* Channel number. */
-        DWT_PLEN_128,    /* Preamble length. Used in TX only. */
-        DWT_PAC8,        /* Preamble acquisition chunk size. Used in RX only. */
-        9,               /* TX preamble code. Used in TX only. */
-        9,               /* RX preamble code. Used in RX only. */
-        1,               /* 0 to use standard 8 symbol SFD, 1 to use non-standard 8 symbol, 2 for non-standard 16 symbol SFD and 3 for 4z 8 symbol SDF type */
-        DWT_BR_6M8,      /* Data rate. */
-        DWT_PHRMODE_STD, /* PHY header mode. */
-        DWT_PHRRATE_STD, /* PHY header rate. */
-        (129 + 8 - 8),   /* SFD timeout (preamble length + 1 + SFD length - PAC size). Used in RX only. */
-        DWT_STS_MODE_OFF, /* STS disabled */
-        DWT_STS_LEN_64,/* STS length see allowed values in Enum dwt_sts_lengths_e */
-        DWT_PDOA_M0      /* PDOA mode off */
+    5,                /* Channel number. */
+    DWT_PLEN_128,     /* Preamble length. Used in TX only. */
+    DWT_PAC8,         /* Preamble acquisition chunk size. Used in RX only. */
+    9,                /* TX preamble code. Used in TX only. */
+    9,                /* RX preamble code. Used in RX only. */
+    1,                /* 0 to use standard 8 symbol SFD, 1 to use non-standard 8 symbol, 2 for non-standard 16 symbol SFD and 3 for 4z 8 symbol SDF type */
+    DWT_BR_6M8,       /* Data rate. */
+    DWT_PHRMODE_STD,  /* PHY header mode. */
+    DWT_PHRRATE_STD,  /* PHY header rate. */
+    (129 + 8 - 8),    /* SFD timeout (preamble length + 1 + SFD length - PAC size). Used in RX only. */
+    DWT_STS_MODE_OFF, /* STS disabled */
+    DWT_STS_LEN_64,   /* STS length see allowed values in Enum dwt_sts_lengths_e */
+    DWT_PDOA_M0       /* PDOA mode off */
 };
 
 /* Inter-ranging delay period, in milliseconds. */
@@ -65,7 +68,6 @@ static uint32_t status_reg = 0;
 #define POLL_TX_TO_RESP_RX_DLY_UUS 300
 #define RESP_RX_TIMEOUT_UUS 1000
 
-
 /* Hold copies of computed time of flight and distance here for reference so that it can be examined at a debug breakpoint. */
 static double tof;
 static double distance;
@@ -73,44 +75,135 @@ static double distance;
 /* Values for the PG_DELAY and TX_POWER registers reflect the bandwidth and power of the spectrum at the current
  * temperature. These values can be calibrated prior to taking reference measurements. See NOTE 2 below. */
 extern dwt_txconfig_t txconfig_options;
+// === TASK: MPU6050 Orientation Task ===
+void mpu6050_rpy_task(void *params)
+{
+    esp_err_t ret;
+    uint8_t mpu6050_deviceid;
+    mpu6050_acce_value_t acce;
+    mpu6050_gyro_value_t gyro;
 
-//Creating a task for UWB reading
-void UWB_task(void * params){
-while(1){
-  /* Write frame data to DW IC and prepare transmission. See NOTE 7 below. */
-  tx_poll_msg[ALL_MSG_SN_IDX] = frame_seq_nb;
-  dwt_write32bitreg(SYS_STATUS_ID, SYS_STATUS_TXFRS_BIT_MASK);
-  dwt_writetxdata(sizeof(tx_poll_msg), tx_poll_msg, 0); /* Zero offset in TX buffer. */
-  dwt_writetxfctrl(sizeof(tx_poll_msg), 0, 1); /* Zero offset in TX buffer, ranging. */
+    float roll = 0.0f, pitch = 0.0f, yaw = 0.0f;
+    int64_t last_time = esp_timer_get_time();  // μs
 
-  /* Start transmission, indicating that a response is expected so that reception is enabled automatically after the frame is sent and the delay
-   * set by dwt_setrxaftertxdelay() has elapsed. */
-  
-  dwt_starttx(DWT_START_TX_IMMEDIATE | DWT_RESPONSE_EXPECTED);
+    ret = mpu6050_get_deviceid(mpu6050, &mpu6050_deviceid);
+    TEST_ASSERT_EQUAL(ESP_OK, ret);
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(MPU6050_WHO_AM_I_VAL, mpu6050_deviceid, "Wrong WHO_AM_I");
 
-  /* We assume that the transmission is achieved correctly, poll for reception of a frame or error/timeout. See NOTE 8 below. */
-  while (!((status_reg = dwt_read32bitreg(SYS_STATUS_ID)) & (SYS_STATUS_RXFCG_BIT_MASK | SYS_STATUS_ALL_RX_TO | SYS_STATUS_ALL_RX_ERR)))
-  {}
+    while (1)
+    {
+        if (xSemaphoreTake(mutex, pdMS_TO_TICKS(50)))  // longer window for MPU read
+        {
+            int64_t now = esp_timer_get_time();  // in μs
+            float dt = (now - last_time) / 1000000.0f; // seconds
+            last_time = now;
 
-  /* Increment frame sequence number after transmission of the poll message (modulo 256). */
-  frame_seq_nb++;
-  // if (status_reg & SYS_STATUS_RXFCG_BIT_MASK){
-  //   printf("RXFCG = 1\n");
-  // }
-  // else{
-  //   printf("RXFCG = 0\n");
-  // }
-  if (status_reg & SYS_STATUS_RXFCG_BIT_MASK)
+            ret = mpu6050_get_acce(mpu6050, &acce);
+            TEST_ASSERT_EQUAL(ESP_OK, ret);
+
+            ret = mpu6050_get_gyro(mpu6050, &gyro);
+            TEST_ASSERT_EQUAL(ESP_OK, ret);
+
+            // Compute accelerometer-based Roll & Pitch
+            float accel_roll = atan2f(acce.acce_y, acce.acce_z) * 180.0f / M_PI;
+            float accel_pitch = atan2f(-acce.acce_x, sqrtf(acce.acce_y * acce.acce_y + acce.acce_z * acce.acce_z)) * 180.0f / M_PI;
+
+            // Gyroscope rate
+            float gyro_roll_rate = gyro.gyro_x;
+            float gyro_pitch_rate = gyro.gyro_y;
+            float gyro_yaw_rate = gyro.gyro_z;
+
+            // Complementary filter
+            roll = ALPHA * (roll + gyro_roll_rate * dt) + (1.0f - ALPHA) * accel_roll;
+            pitch = ALPHA * (pitch + gyro_pitch_rate * dt) + (1.0f - ALPHA) * accel_pitch;
+
+            // Yaw integration
+            yaw += gyro_yaw_rate * dt;
+            if (yaw >= 360.0f) yaw -= 360.0f;
+            if (yaw < 0.0f) yaw += 360.0f;
+
+            ESP_LOGI(MPU_TAG, "Roll: %.2f°, Pitch: %.2f°, Yaw: %.2f°, dt=%.3fs", roll, pitch, yaw, dt);
+
+            xSemaphoreGive(mutex);
+        }
+        else
+        {
+            ESP_LOGW(MPU_TAG, "MPU6050 reading timed out");
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(200));  // ~10 Hz
+    }
+
+    mpu6050_delete(mpu6050);
+    i2c_driver_delete(I2C_MASTER_NUM);
+    vTaskDelete(NULL);
+}
+
+
+// === TASK: Servo Control ===
+void servo_motor_task(void * param)
+{
+    while (1)
+    {
+        if (xSemaphoreTake(mutex, pdMS_TO_TICKS(120)))
+        {
+            printf("Running Two Servos\n");
+
+            // Control code here (e.g., pwm set)
+            // ...
+
+            xSemaphoreGive(mutex);
+        }
+        else
+        {
+            printf("Servo reading timed out\n");
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(20));  // ~50 Hz
+    }
+}
+// Creating a task for UWB reading
+void UWB_task(void *params)
+{
+  while (1)
   {
-      uint32_t frame_len;
+    /* Write frame data to DW IC and prepare transmission. See NOTE 7 below. */
+    if (xSemaphoreTake(mutex, pdMS_TO_TICKS(200)))
+    {
+      tx_poll_msg[ALL_MSG_SN_IDX] = frame_seq_nb;
+      dwt_write32bitreg(SYS_STATUS_ID, SYS_STATUS_TXFRS_BIT_MASK);
+      dwt_writetxdata(sizeof(tx_poll_msg), tx_poll_msg, 0); /* Zero offset in TX buffer. */
+      dwt_writetxfctrl(sizeof(tx_poll_msg), 0, 1);          /* Zero offset in TX buffer, ranging. */
 
-      /* Clear good RX frame event in the DW IC status register. */
-      dwt_write32bitreg(SYS_STATUS_ID, SYS_STATUS_RXFCG_BIT_MASK);
+      /* Start transmission, indicating that a response is expected so that reception is enabled automatically after the frame is sent and the delay
+       * set by dwt_setrxaftertxdelay() has elapsed. */
 
-      /* A frame has been received, read it into the local buffer. */
-      frame_len = dwt_read32bitreg(RX_FINFO_ID) & RXFLEN_MASK;
-      if (frame_len <= sizeof(rx_buffer))
+      dwt_starttx(DWT_START_TX_IMMEDIATE | DWT_RESPONSE_EXPECTED);
+
+      /* We assume that the transmission is achieved correctly, poll for reception of a frame or error/timeout. See NOTE 8 below. */
+      while (!((status_reg = dwt_read32bitreg(SYS_STATUS_ID)) & (SYS_STATUS_RXFCG_BIT_MASK | SYS_STATUS_ALL_RX_TO | SYS_STATUS_ALL_RX_ERR)))
       {
+      }
+
+      /* Increment frame sequence number after transmission of the poll message (modulo 256). */
+      frame_seq_nb++;
+      // if (status_reg & SYS_STATUS_RXFCG_BIT_MASK){
+      //   printf("RXFCG = 1\n");
+      // }
+      // else{
+      //   printf("RXFCG = 0\n");
+      // }
+      if (status_reg & SYS_STATUS_RXFCG_BIT_MASK)
+      {
+        uint32_t frame_len;
+
+        /* Clear good RX frame event in the DW IC status register. */
+        dwt_write32bitreg(SYS_STATUS_ID, SYS_STATUS_RXFCG_BIT_MASK);
+
+        /* A frame has been received, read it into the local buffer. */
+        frame_len = dwt_read32bitreg(RX_FINFO_ID) & RXFLEN_MASK;
+        if (frame_len <= sizeof(rx_buffer))
+        {
           dwt_readrxdata(rx_buffer, frame_len, 0);
 
           /* Check that the frame is the expected response from the companion "SS TWR responder" example.
@@ -118,60 +211,70 @@ while(1){
           rx_buffer[ALL_MSG_SN_IDX] = 0;
           if (memcmp(rx_buffer, rx_resp_msg, ALL_MSG_COMMON_LEN) == 0)
           {
-              uint32_t poll_tx_ts, resp_rx_ts, poll_rx_ts, resp_tx_ts;
-              int32_t rtd_init, rtd_resp;
-              float clockOffsetRatio ;
+            uint32_t poll_tx_ts, resp_rx_ts, poll_rx_ts, resp_tx_ts;
+            int32_t rtd_init, rtd_resp;
+            float clockOffsetRatio;
 
-              /* Retrieve poll transmission and response reception timestamps. See NOTE 9 below. */
-              poll_tx_ts = dwt_readtxtimestamplo32();
-              resp_rx_ts = dwt_readrxtimestamplo32();
+            /* Retrieve poll transmission and response reception timestamps. See NOTE 9 below. */
+            poll_tx_ts = dwt_readtxtimestamplo32();
+            resp_rx_ts = dwt_readrxtimestamplo32();
 
-              /* Read carrier integrator value and calculate clock offset ratio. See NOTE 11 below. */
-              clockOffsetRatio = ((float)dwt_readclockoffset()) / (uint32_t)(1<<26);
+            /* Read carrier integrator value and calculate clock offset ratio. See NOTE 11 below. */
+            clockOffsetRatio = ((float)dwt_readclockoffset()) / (uint32_t)(1 << 26);
 
-              /* Get timestamps embedded in response message. */
-              resp_msg_get_ts(&rx_buffer[RESP_MSG_POLL_RX_TS_IDX], &poll_rx_ts);
-              resp_msg_get_ts(&rx_buffer[RESP_MSG_RESP_TX_TS_IDX], &resp_tx_ts);
+            /* Get timestamps embedded in response message. */
+            resp_msg_get_ts(&rx_buffer[RESP_MSG_POLL_RX_TS_IDX], &poll_rx_ts);
+            resp_msg_get_ts(&rx_buffer[RESP_MSG_RESP_TX_TS_IDX], &resp_tx_ts);
 
-              /* Compute time of flight and distance, using clock offset ratio to correct for differing local and remote clock rates */
-              rtd_init = resp_rx_ts - poll_tx_ts;
-              rtd_resp = resp_tx_ts - poll_rx_ts;
+            /* Compute time of flight and distance, using clock offset ratio to correct for differing local and remote clock rates */
+            rtd_init = resp_rx_ts - poll_tx_ts;
+            rtd_resp = resp_tx_ts - poll_rx_ts;
 
-              tof = ((rtd_init - rtd_resp * (1 - clockOffsetRatio)) / 2.0) * DWT_TIME_UNITS;
-              distance = tof * SPEED_OF_LIGHT;
+            tof = ((rtd_init - rtd_resp * (1 - clockOffsetRatio)) / 2.0) * DWT_TIME_UNITS;
+            distance = tof * SPEED_OF_LIGHT;
 
-              /* Display computed distance on LCD. */
-              snprintf(dist_str, sizeof(dist_str), "DIS: %3.2f cm", distance*100);
-              test_run_info((unsigned char *)dist_str);
+            /* Display computed distance on LCD. */
+            snprintf(dist_str, sizeof(dist_str), "DIS: %3.2f cm", distance * 100);
+            test_run_info((unsigned char *)dist_str);
           }
+        }
       }
-  }
-  else
-  {
-      /* Clear RX error/timeout events in the DW IC status register. */
-      dwt_write32bitreg(SYS_STATUS_ID, SYS_STATUS_ALL_RX_TO | SYS_STATUS_ALL_RX_ERR);
-  }
+      else
+      {
+        /* Clear RX error/timeout events in the DW IC status register. */
+        dwt_write32bitreg(SYS_STATUS_ID, SYS_STATUS_ALL_RX_TO | SYS_STATUS_ALL_RX_ERR);
+      }
 
-  /* Execute a delay between ranging exchanges. */
-  Sleep(RNG_DELAY_MS);
+      /* Execute a delay between ranging exchanges. */
+      Sleep(RNG_DELAY_MS);
+      xSemaphoreGive(mutex);
+    }
+    else
+    {
+      printf("UWB sensor reading timedout\n");
+    }
+    vTaskDelay(pdMS_TO_TICKS(10));
   }
 }
 
+extern "C"
+{
+  void app_main(void);
+}
 
+void app_main(void)
+{
+  mutex = xSemaphoreCreateMutex();
+  /*************************************** WIFI INITIALIZATION *******************************/
 
-extern "C" {void app_main(void);}
+  ESP_ERROR_CHECK(nvs_flash_init());
+  wifi_connect_init();
+  ESP_ERROR_CHECK(wifi_connect_sta("Signum Signal", "ntgl5273", 10000));
+  // vTaskDelay(pdMS_TO_TICKS(5000));
+  /*************************************** MPU6050 INITIALIZATION ***************************/
+  mpu6050_init();
 
-void app_main(void) {
-/*************************************** WIFI INITIALIZATION *******************************/
-
-ESP_ERROR_CHECK(nvs_flash_init());
-wifi_connect_init();
-ESP_ERROR_CHECK(wifi_connect_sta("Signum Signal", "ntgl5273", 10000));
-
-/*************************************** MPU6050 INITIALIZATION ***************************/
-mpu6050_init();
-
-/************************************** UWB INITIALIZATION ***************************/
+  /************************************** UWB INITIALIZATION ***************************/
 
   UART_init();
   test_run_info((unsigned char *)APP_NAME);
@@ -182,49 +285,53 @@ mpu6050_init();
 
   delay(2); // Time needed for DW3000 to start up (transition from INIT_RC to IDLE_RC, or could wait for SPIRDY event)
 
-  while (!dwt_checkidlerc()) // Need to make sure DW IC is in IDLE_RC before proceeding 
+  while (!dwt_checkidlerc()) // Need to make sure DW IC is in IDLE_RC before proceeding
   {
     UART_puts("IDLE FAILED\r\n");
-    while (1) ;
+    while (1)
+      ;
   }
 
   if (dwt_initialise(DWT_DW_INIT) == DWT_ERROR)
   {
     UART_puts("INIT FAILED\r\n");
-    while (1) ;
+    while (1)
+      ;
   }
 
   // Enabling LEDs here for debug so that for each TX the D1 LED will flash on DW3000 red eval-shield boards.
   dwt_setleds(DWT_LEDS_ENABLE | DWT_LEDS_INIT_BLINK);
 
   /* Configure DW IC. See NOTE 6 below. */
-  if(dwt_configure(&config)) // if the dwt_configure returns DWT_ERROR either the PLL or RX calibration has failed the host should reset the device
+  if (dwt_configure(&config)) // if the dwt_configure returns DWT_ERROR either the PLL or RX calibration has failed the host should reset the device
   {
     UART_puts("CONFIG FAILED\r\n");
-    while (1) ;
+    while (1)
+      ;
   }
 
-    /* Configure the TX spectrum parameters (power, PG delay and PG count) */
-    dwt_configuretxrf(&txconfig_options);
+  /* Configure the TX spectrum parameters (power, PG delay and PG count) */
+  dwt_configuretxrf(&txconfig_options);
 
-    /* Apply default antenna delay value. See NOTE 2 below. */
-    dwt_setrxantennadelay(RX_ANT_DLY);
-    dwt_settxantennadelay(TX_ANT_DLY);
+  /* Apply default antenna delay value. See NOTE 2 below. */
+  dwt_setrxantennadelay(RX_ANT_DLY);
+  dwt_settxantennadelay(TX_ANT_DLY);
 
-    /* Set expected response's delay and timeout. See NOTE 1 and 5 below.
-     * As this example only handles one incoming frame with always the same delay and timeout, those values can be set here once for all. */
-    dwt_setrxaftertxdelay(POLL_TX_TO_RESP_RX_DLY_UUS);
-    dwt_setrxtimeout(RESP_RX_TIMEOUT_UUS);
+  /* Set expected response's delay and timeout. See NOTE 1 and 5 below.
+   * As this example only handles one incoming frame with always the same delay and timeout, those values can be set here once for all. */
+  dwt_setrxaftertxdelay(POLL_TX_TO_RESP_RX_DLY_UUS);
+  dwt_setrxtimeout(RESP_RX_TIMEOUT_UUS);
 
-    /* Next can enable TX/RX states output on GPIOs 5 and 6 to help debug, and also TX/RX LEDs
-     * Note, in real low power applications the LEDs should not be used. */
-    dwt_setlnapamode(DWT_LNA_ENABLE | DWT_PA_ENABLE);
-    
-    xTaskCreatePinnedToCore(UWB_task, "UWB Task", 1024*2, NULL, 2, NULL, 1);
-    // xTaskCreatePinnedToCore(mpu6050_rpy_task, "MPU6050 Task", 1024*2, NULL, 2, NULL, 1);
+  /* Next can enable TX/RX states output on GPIOs 5 and 6 to help debug, and also TX/RX LEDs
+   * Note, in real low power applications the LEDs should not be used. */
+  dwt_setlnapamode(DWT_LNA_ENABLE | DWT_PA_ENABLE);
+
+  // All tasks
+  xTaskCreatePinnedToCore(UWB_task, "UWB Task", 1024 * 2, NULL, 4, NULL, 1);
+  xTaskCreatePinnedToCore(mpu6050_rpy_task, "MPU6050 Task", 1024*2, NULL, 4, NULL, 1);
+  xTaskCreatePinnedToCore(servo_motor_task, "Servo Task", 1024 * 2, NULL, 5, NULL, 1);
+
 }
-
-
 
 /*****************************************************************************************************************************************************
  * NOTES:
