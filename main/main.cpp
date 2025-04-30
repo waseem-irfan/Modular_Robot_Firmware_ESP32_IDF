@@ -12,7 +12,7 @@ extern "C" {
 #define APP_NAME "SS TWR INIT v1.0"
 
 // connection pins
-const uint8_t PIN_RST = 21; // reset pin
+const uint8_t PIN_RST = 26; // reset pin
 const uint8_t PIN_IRQ = 4; // irq pin
 const uint8_t PIN_SS = 5; // spi select pin
 
@@ -154,8 +154,11 @@ while(1){
 
   /* Execute a delay between ranging exchanges. */
   Sleep(RNG_DELAY_MS);
+  }
 }
-}
+
+
+
 extern "C" {void app_main(void);}
 
 void app_main(void) {
@@ -164,6 +167,9 @@ void app_main(void) {
 ESP_ERROR_CHECK(nvs_flash_init());
 wifi_connect_init();
 ESP_ERROR_CHECK(wifi_connect_sta("Signum Signal", "ntgl5273", 10000));
+
+/*************************************** MPU6050 INITIALIZATION ***************************/
+mpu6050_init();
 
 /************************************** UWB INITIALIZATION ***************************/
 
