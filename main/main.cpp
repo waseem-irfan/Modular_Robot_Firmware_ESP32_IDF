@@ -8,9 +8,11 @@ extern "C"
 #include "wifi_connect.h"
 #include "nvs_flash.h"
 #include "mpu6050_rpy.h"
+#include "mqtt_comm.h"
 #include "unity.h"
 }
 SemaphoreHandle_t mutex;
+QueueHandle_t sensor_data_queue;
 const char *MPU_TAG = "mpu6050_orientation";
 #define APP_NAME "SS TWR INIT v1.0"
 
@@ -37,7 +39,7 @@ static dwt_config_t config = {
 };
 
 /* Inter-ranging delay period, in milliseconds. */
-#define RNG_DELAY_MS 100
+#define RNG_DELAY_MS 10
 
 /* Default antenna delay values for 64 MHz PRF. See NOTE 2 below. */
 #define TX_ANT_DLY 16397
@@ -75,6 +77,26 @@ static double distance;
 /* Values for the PG_DELAY and TX_POWER registers reflect the bandwidth and power of the spectrum at the current
  * temperature. These values can be calibrated prior to taking reference measurements. See NOTE 2 below. */
 extern dwt_txconfig_t txconfig_options;
+// enum to identify data of sensor
+typedef enum{
+  DATA_TYPE_MPU6050,
+  DATA_TYPE_UWB
+}sensor_type_t;
+// unified structure for queue handling
+typedef struct{
+  sensor_type_t type;
+  union {
+    struct{
+        float roll;
+        float pitch;
+        float yaw;
+    }mpu;
+    struct{
+        double distance;
+    }uwb;
+  };
+}sensor_data_t;
+
 // === TASK: MPU6050 Orientation Task ===
 void mpu6050_rpy_task(void *params)
 {
@@ -92,8 +114,9 @@ void mpu6050_rpy_task(void *params)
 
     while (1)
     {
-        if (xSemaphoreTake(mutex, pdMS_TO_TICKS(50)))  // longer window for MPU read
+        if (xSemaphoreTake(mutex, pdMS_TO_TICKS(200)))  // longer window for MPU read
         {
+          printf("mutex taken by mpu6050_task\n");
             int64_t now = esp_timer_get_time();  // in μs
             float dt = (now - last_time) / 1000000.0f; // seconds
             last_time = now;
@@ -124,14 +147,27 @@ void mpu6050_rpy_task(void *params)
 
             ESP_LOGI(MPU_TAG, "Roll: %.2f°, Pitch: %.2f°, Yaw: %.2f°, dt=%.3fs", roll, pitch, yaw, dt);
 
+            // sending it to queue
+            sensor_data_t data;
+            data.type = DATA_TYPE_MPU6050;
+            data.mpu.roll = roll;
+            data.mpu.pitch = pitch;
+            data.mpu.yaw = yaw;
+            if(xQueueSend(sensor_data_queue, &data, pdMS_TO_TICKS(20))){
+              printf("MPU6050 data sent to queue\n");
+            }
+            else{
+              printf("failed to send mpu6050 data to queue\n");
+            }
             xSemaphoreGive(mutex);
+            printf("mutex releassed by mpu6050_task\n");
         }
         else
         {
             ESP_LOGW(MPU_TAG, "MPU6050 reading timed out");
         }
 
-        vTaskDelay(pdMS_TO_TICKS(200));  // ~10 Hz
+        vTaskDelay(pdMS_TO_TICKS(100));  // ~10 Hz
     }
 
     mpu6050_delete(mpu6050);
@@ -145,21 +181,23 @@ void servo_motor_task(void * param)
 {
     while (1)
     {
-        if (xSemaphoreTake(mutex, pdMS_TO_TICKS(120)))
+        if (xSemaphoreTake(mutex, pdMS_TO_TICKS(100)))
         {
+            printf("mutex taken by servo_task\n");
             printf("Running Two Servos\n");
 
             // Control code here (e.g., pwm set)
             // ...
 
             xSemaphoreGive(mutex);
+            printf("mutex released by servo_task\n");
         }
         else
         {
             printf("Servo reading timed out\n");
         }
 
-        vTaskDelay(pdMS_TO_TICKS(20));  // ~50 Hz
+        vTaskDelay(pdMS_TO_TICKS(40));  // ~50 Hz
     }
 }
 // Creating a task for UWB reading
@@ -170,6 +208,7 @@ void UWB_task(void *params)
     /* Write frame data to DW IC and prepare transmission. See NOTE 7 below. */
     if (xSemaphoreTake(mutex, pdMS_TO_TICKS(200)))
     {
+      printf("mutex tasken by uwb_task\n");
       tx_poll_msg[ALL_MSG_SN_IDX] = frame_seq_nb;
       dwt_write32bitreg(SYS_STATUS_ID, SYS_STATUS_TXFRS_BIT_MASK);
       dwt_writetxdata(sizeof(tx_poll_msg), tx_poll_msg, 0); /* Zero offset in TX buffer. */
@@ -236,6 +275,17 @@ void UWB_task(void *params)
             /* Display computed distance on LCD. */
             snprintf(dist_str, sizeof(dist_str), "DIS: %3.2f cm", distance * 100);
             test_run_info((unsigned char *)dist_str);
+
+            sensor_data_t data;
+            data.type = DATA_TYPE_UWB;
+            data.uwb.distance = distance;
+            if(xQueueSend(sensor_data_queue, &data, pdMS_TO_TICKS(50))){
+              printf("UWB data sent to queue\n");
+            }
+            else{
+              printf("failed to send UWB data to queue\n");
+            }
+
           }
         }
       }
@@ -248,13 +298,54 @@ void UWB_task(void *params)
       /* Execute a delay between ranging exchanges. */
       Sleep(RNG_DELAY_MS);
       xSemaphoreGive(mutex);
+      printf("mutex released by uwb_task\n");
     }
     else
     {
       printf("UWB sensor reading timedout\n");
     }
-    vTaskDelay(pdMS_TO_TICKS(10));
+    vTaskDelay(pdMS_TO_TICKS(150));
   }
+}
+
+// Task to send message
+void test_send_messages(void *param)
+{
+  sensor_data_t received_data;
+    while (true)
+    {
+      if(xSemaphoreTake(mutex, pdMS_TO_TICKS(100))){
+        printf("mutex taken by MQTT_task\n");
+
+        
+        if(xQueueReceive(sensor_data_queue, &received_data, pdMS_TO_TICKS(80))){
+          char payload[128];
+          switch(received_data.type){
+            case DATA_TYPE_MPU6050:
+              snprintf(payload, sizeof(payload), "roll: %.2f , pitch: %.2f, yaw: %.2f", received_data.mpu.roll,
+                                                        received_data.mpu.pitch, received_data.mpu.yaw);
+              mqtt_send("masterBOT/mpu6050", payload);
+              break;
+            
+            case DATA_TYPE_UWB:
+              snprintf(payload, sizeof(payload), "Distance : %.2f", received_data.uwb.distance);
+              mqtt_send("masterBOT/uwb", payload);
+              break;
+          }
+
+        }
+        else{
+          printf("failed to send sensors data to broker\n");
+        }
+        xSemaphoreGive(mutex);
+        printf("mutex released by MQTT_task\n");
+      }
+      else{
+        printf("MQTT writing timedout\n");
+      }
+
+      vTaskDelay(pdMS_TO_TICKS(100));
+    }
 }
 
 extern "C"
@@ -264,13 +355,15 @@ extern "C"
 
 void app_main(void)
 {
-  mutex = xSemaphoreCreateMutex();
+  mutex = xSemaphoreCreateMutex(); // create mutex
+  sensor_data_queue = xQueueCreate(20, sizeof(sensor_data_t)); // creating queue
   /*************************************** WIFI INITIALIZATION *******************************/
 
   ESP_ERROR_CHECK(nvs_flash_init());
   wifi_connect_init();
   ESP_ERROR_CHECK(wifi_connect_sta("Signum Signal", "ntgl5273", 10000));
-  // vTaskDelay(pdMS_TO_TICKS(5000));
+  vTaskDelay(pdMS_TO_TICKS(1000));
+
   /*************************************** MPU6050 INITIALIZATION ***************************/
   mpu6050_init();
 
@@ -325,11 +418,17 @@ void app_main(void)
   /* Next can enable TX/RX states output on GPIOs 5 and 6 to help debug, and also TX/RX LEDs
    * Note, in real low power applications the LEDs should not be used. */
   dwt_setlnapamode(DWT_LNA_ENABLE | DWT_PA_ENABLE);
+  
+  /************************************** MQTT_INITIALIZATION **************************/
+  mqtt_start();
+
+
 
   // All tasks
-  xTaskCreatePinnedToCore(UWB_task, "UWB Task", 1024 * 2, NULL, 4, NULL, 1);
-  xTaskCreatePinnedToCore(mpu6050_rpy_task, "MPU6050 Task", 1024*2, NULL, 4, NULL, 1);
-  xTaskCreatePinnedToCore(servo_motor_task, "Servo Task", 1024 * 2, NULL, 5, NULL, 1);
+  xTaskCreatePinnedToCore(UWB_task, "UWB Task", 1024 * 2, NULL, 5, NULL, 1);
+  xTaskCreatePinnedToCore(mpu6050_rpy_task, "MPU6050 Task", 1024*4, NULL, 4, NULL, 1);
+  xTaskCreatePinnedToCore(servo_motor_task, "Servo Task", 1024 * 2, NULL, 4, NULL, 0);
+  xTaskCreatePinnedToCore(test_send_messages, "MQTT Task", 1024 * 4, NULL, 3, NULL, 0);
 
 }
 

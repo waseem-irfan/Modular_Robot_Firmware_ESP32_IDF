@@ -14,7 +14,8 @@ void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event
     {
     case MQTT_EVENT_CONNECTED:
         ESP_LOGI(MQTT_TAG, "MQTT_EVENT_CONNECTED");
-            esp_mqtt_client_subscribe(client, "/masterBOT/UWB", 1);
+            esp_mqtt_client_subscribe(client, "masterBOT/mpu6050", 1);
+            esp_mqtt_client_subscribe(client, "masterBOT/uwb", 1);
         break;
     case MQTT_EVENT_DISCONNECTED:
         ESP_LOGE(MQTT_TAG, "MQTT_EVENT_DISCONNECTED");
@@ -57,16 +58,4 @@ void mqtt_start(void){
 int mqtt_send(const char *topic, const char *payload)
 {
     return esp_mqtt_client_publish(client, topic, payload, strlen(payload), 1, 0);
-}
-// Task to send message
-void test_send_messages(void *param)
-{
-    
-    char message[50];
-    while (true)
-    {
-        sprintf(message, "X = 22, Y= 10, Z=0, Theta = 35");
-        mqtt_send("/masterBOT/UWB", message);
-        vTaskDelay(pdMS_TO_TICKS(1000));
-    }
 }
