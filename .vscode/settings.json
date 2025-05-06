@@ -18,6 +18,9 @@
         "stdbool.h": "c",
         "pulse.h": "c",
         "blink.h": "c",
-        "mpu6050.h": "c"
+        "mpu6050.h": "c",
+        "servo_motor.h": "c",
+        "ledc.h": "c",
+        "bdc_motor.h": "c"
     }
 }

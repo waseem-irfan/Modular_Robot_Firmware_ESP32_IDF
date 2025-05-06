@@ -10,11 +10,18 @@ extern "C"
 #include "mpu6050_rpy.h"
 #include "mqtt_comm.h"
 #include "unity.h"
+#include "servo_motor.h"
+// #include "driver/gpio.h"
 }
 SemaphoreHandle_t mutex;
 QueueHandle_t sensor_data_queue;
 const char *MPU_TAG = "mpu6050_orientation";
 #define APP_NAME "SS TWR INIT v1.0"
+
+#define SERVO_PIN1 GPIO_NUM_12
+#define SERVO_PIN2 GPIO_NUM_27
+#define CHANNEL_1 LEDC_CHANNEL_0
+#define CHANNEL_2 LEDC_CHANNEL_1
 
 // connection pins
 const uint8_t PIN_RST = 26; // reset pin
@@ -181,23 +188,9 @@ void servo_motor_task(void * param)
 {
     while (1)
     {
-        if (xSemaphoreTake(mutex, pdMS_TO_TICKS(100)))
-        {
-            printf("mutex taken by servo_task\n");
-            printf("Running Two Servos\n");
-
-            // Control code here (e.g., pwm set)
-            // ...
-
-            xSemaphoreGive(mutex);
-            printf("mutex released by servo_task\n");
-        }
-        else
-        {
-            printf("Servo reading timed out\n");
-        }
-
-        vTaskDelay(pdMS_TO_TICKS(40));  // ~50 Hz
+      set_servo_speed(15, CHANNEL_1);
+      set_servo_speed(-15, CHANNEL_2);
+      vTaskDelay(pdMS_TO_TICKS(10));  // ~50 Hz
     }
 }
 // Creating a task for UWB reading
@@ -316,9 +309,9 @@ void test_send_messages(void *param)
     {
       if(xSemaphoreTake(mutex, pdMS_TO_TICKS(100))){
         printf("mutex taken by MQTT_task\n");
-
+          /************************************** MQTT_INITIALIZATION **************************/
         
-        if(xQueueReceive(sensor_data_queue, &received_data, pdMS_TO_TICKS(80))){
+        if(xQueueReceive(sensor_data_queue, &received_data, pdMS_TO_TICKS(100))){
           char payload[128];
           switch(received_data.type){
             case DATA_TYPE_MPU6050:
@@ -344,7 +337,7 @@ void test_send_messages(void *param)
         printf("MQTT writing timedout\n");
       }
 
-      vTaskDelay(pdMS_TO_TICKS(100));
+      vTaskDelay(pdMS_TO_TICKS(120));
     }
 }
 
@@ -355,80 +348,84 @@ extern "C"
 
 void app_main(void)
 {
-  mutex = xSemaphoreCreateMutex(); // create mutex
-  sensor_data_queue = xQueueCreate(20, sizeof(sensor_data_t)); // creating queue
-  /*************************************** WIFI INITIALIZATION *******************************/
+  
+  // setting PWM for servos
+  setup_pwm(SERVO_PIN1, CHANNEL_1);
+  setup_pwm(SERVO_PIN2, CHANNEL_2);
+  // mutex = xSemaphoreCreateMutex(); // create mutex
+  // sensor_data_queue = xQueueCreate(20, sizeof(sensor_data_t)); // creating queue
+  // /*************************************** WIFI INITIALIZATION *******************************/
 
   ESP_ERROR_CHECK(nvs_flash_init());
-  wifi_connect_init();
-  ESP_ERROR_CHECK(wifi_connect_sta("Signum Signal", "ntgl5273", 10000));
-  vTaskDelay(pdMS_TO_TICKS(1000));
+  // wifi_connect_init();
+  // ESP_ERROR_CHECK(wifi_connect_sta("Signum Signal", "ntgl5273", 10000));
+  // vTaskDelay(pdMS_TO_TICKS(1000));
 
-  /*************************************** MPU6050 INITIALIZATION ***************************/
-  mpu6050_init();
+  // /*************************************** MPU6050 INITIALIZATION ***************************/
+  // mpu6050_init();
 
-  /************************************** UWB INITIALIZATION ***************************/
+  // /************************************** UWB INITIALIZATION ***************************/
 
-  UART_init();
-  test_run_info((unsigned char *)APP_NAME);
-  /* Configure SPI rate, DW3000 supports up to 38 MHz */
-  /* Reset DW IC */
-  spiBegin(PIN_IRQ, PIN_RST);
-  spiSelect(PIN_SS);
+  // UART_init();
+  // test_run_info((unsigned char *)APP_NAME);
+  // /* Configure SPI rate, DW3000 supports up to 38 MHz */
+  // /* Reset DW IC */
+  // spiBegin(PIN_IRQ, PIN_RST);
+  // spiSelect(PIN_SS);
 
-  delay(2); // Time needed for DW3000 to start up (transition from INIT_RC to IDLE_RC, or could wait for SPIRDY event)
+  // delay(2); // Time needed for DW3000 to start up (transition from INIT_RC to IDLE_RC, or could wait for SPIRDY event)
 
-  while (!dwt_checkidlerc()) // Need to make sure DW IC is in IDLE_RC before proceeding
-  {
-    UART_puts("IDLE FAILED\r\n");
-    while (1)
-      ;
-  }
+  // while (!dwt_checkidlerc()) // Need to make sure DW IC is in IDLE_RC before proceeding
+  // {
+  //   UART_puts("IDLE FAILED\r\n");
+  //   while (1)
+  //     ;
+  // }
 
-  if (dwt_initialise(DWT_DW_INIT) == DWT_ERROR)
-  {
-    UART_puts("INIT FAILED\r\n");
-    while (1)
-      ;
-  }
+  // if (dwt_initialise(DWT_DW_INIT) == DWT_ERROR)
+  // {
+  //   UART_puts("INIT FAILED\r\n");
+  //   while (1)
+  //     ;
+  // }
 
-  // Enabling LEDs here for debug so that for each TX the D1 LED will flash on DW3000 red eval-shield boards.
-  dwt_setleds(DWT_LEDS_ENABLE | DWT_LEDS_INIT_BLINK);
+  // // Enabling LEDs here for debug so that for each TX the D1 LED will flash on DW3000 red eval-shield boards.
+  // dwt_setleds(DWT_LEDS_ENABLE | DWT_LEDS_INIT_BLINK);
 
-  /* Configure DW IC. See NOTE 6 below. */
-  if (dwt_configure(&config)) // if the dwt_configure returns DWT_ERROR either the PLL or RX calibration has failed the host should reset the device
-  {
-    UART_puts("CONFIG FAILED\r\n");
-    while (1)
-      ;
-  }
+  // /* Configure DW IC. See NOTE 6 below. */
+  // if (dwt_configure(&config)) // if the dwt_configure returns DWT_ERROR either the PLL or RX calibration has failed the host should reset the device
+  // {
+  //   UART_puts("CONFIG FAILED\r\n");
+  //   while (1)
+  //     ;
+  // }
 
-  /* Configure the TX spectrum parameters (power, PG delay and PG count) */
-  dwt_configuretxrf(&txconfig_options);
+  // /* Configure the TX spectrum parameters (power, PG delay and PG count) */
+  // dwt_configuretxrf(&txconfig_options);
 
-  /* Apply default antenna delay value. See NOTE 2 below. */
-  dwt_setrxantennadelay(RX_ANT_DLY);
-  dwt_settxantennadelay(TX_ANT_DLY);
+  // /* Apply default antenna delay value. See NOTE 2 below. */
+  // dwt_setrxantennadelay(RX_ANT_DLY);
+  // dwt_settxantennadelay(TX_ANT_DLY);
 
-  /* Set expected response's delay and timeout. See NOTE 1 and 5 below.
-   * As this example only handles one incoming frame with always the same delay and timeout, those values can be set here once for all. */
-  dwt_setrxaftertxdelay(POLL_TX_TO_RESP_RX_DLY_UUS);
-  dwt_setrxtimeout(RESP_RX_TIMEOUT_UUS);
+  // /* Set expected response's delay and timeout. See NOTE 1 and 5 below.
+  //  * As this example only handles one incoming frame with always the same delay and timeout, those values can be set here once for all. */
+  // dwt_setrxaftertxdelay(POLL_TX_TO_RESP_RX_DLY_UUS);
+  // dwt_setrxtimeout(RESP_RX_TIMEOUT_UUS);
 
-  /* Next can enable TX/RX states output on GPIOs 5 and 6 to help debug, and also TX/RX LEDs
-   * Note, in real low power applications the LEDs should not be used. */
-  dwt_setlnapamode(DWT_LNA_ENABLE | DWT_PA_ENABLE);
-  
-  /************************************** MQTT_INITIALIZATION **************************/
-  mqtt_start();
+  // /* Next can enable TX/RX states output on GPIOs 5 and 6 to help debug, and also TX/RX LEDs
+  //  * Note, in real low power applications the LEDs should not be used. */
+  // dwt_setlnapamode(DWT_LNA_ENABLE | DWT_PA_ENABLE);
+
+  // mqtt_start();
 
 
+  vTaskDelay(pdMS_TO_TICKS(10000));
 
   // All tasks
-  xTaskCreatePinnedToCore(UWB_task, "UWB Task", 1024 * 2, NULL, 5, NULL, 1);
-  xTaskCreatePinnedToCore(mpu6050_rpy_task, "MPU6050 Task", 1024*4, NULL, 4, NULL, 1);
-  xTaskCreatePinnedToCore(servo_motor_task, "Servo Task", 1024 * 2, NULL, 4, NULL, 0);
-  xTaskCreatePinnedToCore(test_send_messages, "MQTT Task", 1024 * 4, NULL, 3, NULL, 0);
+  // xTaskCreatePinnedToCore(UWB_task, "UWB Task", 1024 * 2, NULL, 5, NULL, 1);
+  // xTaskCreatePinnedToCore(mpu6050_rpy_task, "MPU6050 Task", 1024*4, NULL, 4, NULL, 1);
+  xTaskCreatePinnedToCore(servo_motor_task, "Servo Task", 1024 * 2, NULL, 5, NULL, 0);
+  // xTaskCreatePinnedToCore(test_send_messages, "MQTT Task", 1024 * 4, NULL, 3, NULL, 0);
 
 }
 
