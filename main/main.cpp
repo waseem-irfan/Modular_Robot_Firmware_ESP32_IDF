@@ -422,10 +422,10 @@ void app_main(void)
   vTaskDelay(pdMS_TO_TICKS(10000));
 
   // All tasks
-  // xTaskCreatePinnedToCore(UWB_task, "UWB Task", 1024 * 2, NULL, 5, NULL, 1);
-  // xTaskCreatePinnedToCore(mpu6050_rpy_task, "MPU6050 Task", 1024*4, NULL, 4, NULL, 1);
+  xTaskCreatePinnedToCore(UWB_task, "UWB Task", 1024 * 2, NULL, 5, NULL, 1);
+  xTaskCreatePinnedToCore(mpu6050_rpy_task, "MPU6050 Task", 1024*4, NULL, 4, NULL, 1);
   xTaskCreatePinnedToCore(servo_motor_task, "Servo Task", 1024 * 2, NULL, 5, NULL, 0);
-  // xTaskCreatePinnedToCore(test_send_messages, "MQTT Task", 1024 * 4, NULL, 3, NULL, 0);
+  xTaskCreatePinnedToCore(test_send_messages, "MQTT Task", 1024 * 4, NULL, 3, NULL, 0);
 
 }
 
