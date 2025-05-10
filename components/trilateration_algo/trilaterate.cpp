@@ -61,3 +61,4 @@ bool trilateration(const Anchor& A1, const Anchor& A2, const Anchor& A3, Positio
 
     return true;
 }
+

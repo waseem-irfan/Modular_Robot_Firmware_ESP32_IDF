@@ -5,7 +5,6 @@ extern "C"
 #include "mqtt_comm.h"
 #include "wifi_connect.h"
 #include "nvs_flash.h"
-
 }
 QueueHandle_t distance_queue;
 
@@ -99,7 +98,7 @@ void app_main()
 
   // MQTT
   mqtt_start();
-
+  // delay(5000);
   UART_init();
   test_run_info((unsigned char *)APP_NAME);
 
@@ -228,6 +227,15 @@ void app_main()
               if (trilateration(A1, A2, A3, result))
               {
                 printf("Robot Position X: %.2f cm, Y: %.2f cm, Z: %.2f cm\n", result.x, result.y, result.z);
+
+                // Format the position into a JSON string
+                char payload[128];
+                snprintf(payload, sizeof(payload),
+                         "{\"x\":%.2f,\"y\":%.2f,\"z\":%.2f}",
+                         result.x, result.y, result.z);
+
+                // Send via MQTT to topic "robot/position"
+                mqtt_send("/masterBOT/position", payload);
               }
               else
               {
@@ -244,12 +252,12 @@ void app_main()
         }
       }
     }
-  else
-  {
-    /* Clear RX error events in the DW IC status register. */
-    dwt_write32bitreg(SYS_STATUS_ID, SYS_STATUS_ALL_RX_ERR);
+    else
+    {
+      /* Clear RX error events in the DW IC status register. */
+      dwt_write32bitreg(SYS_STATUS_ID, SYS_STATUS_ALL_RX_ERR);
+    }
   }
-}
 }
 
 /*****************************************************************************************************************************************************
