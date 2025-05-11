@@ -94,7 +94,7 @@ void app_main()
   // WIFI
   nvs_flash_init();
   wifi_connect_init();
-  wifi_connect_sta("Signum Signal", "ntgl5273", 10000);
+  wifi_connect_sta("Nalim", "0123456789", 10000);
 
   // MQTT
   mqtt_start();

@@ -56,7 +56,7 @@ void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event
         memcpy(payload, event->data, len);
         payload[len] = '\0';
 
-        if (sscanf(payload, "DIS: %lf cm", &uwb_distance) == 1 && uwb_distance > 0 && uwb_distance < 10000)
+        if (sscanf(payload, "DIS: %lf cm", &uwb_distance) == 1 && uwb_distance > 0 && uwb_distance < 1000)
         {
             printf("Parsed distance: %.2f from topic: %s\n", uwb_distance, topic);
 
