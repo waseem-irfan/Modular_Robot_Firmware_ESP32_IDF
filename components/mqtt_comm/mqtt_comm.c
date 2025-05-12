@@ -72,12 +72,12 @@ void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event
                 distances_buffer.A1 = uwb_distance;
                 distances_buffer.got_A1 = true;
             }
-            else if (strcmp(topic, "/masterBOT/UWB/A2") == 0)
+            if (strcmp(topic, "/masterBOT/UWB/A2") == 0)
             {
                 distances_buffer.A2 = uwb_distance;
                 distances_buffer.got_A2 = true;
             }
-            else if (strcmp(topic, "/masterBOT/UWB/A3") == 0)
+            if (strcmp(topic, "/masterBOT/UWB/A3") == 0)
             {
                 distances_buffer.A3 = uwb_distance;
                 distances_buffer.got_A3 = true;
