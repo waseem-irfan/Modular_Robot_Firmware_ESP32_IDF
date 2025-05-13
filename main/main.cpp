@@ -5,8 +5,15 @@ extern "C"
 #include "mqtt_comm.h"
 #include "wifi_connect.h"
 #include "nvs_flash.h"
+#include "freertos/task.h"
+#include "freertos/FreeRTOS.h"
+#include "driver/gpio.h"
+#include "servo_motor.h"
 }
 QueueHandle_t distance_queue;
+
+#define SERVO1_PIN GPIO_NUM_12
+#define SERVO2_PIN GPIO_NUM_27
 
 #define APP_NAME "SS TWR RESP v1.0"
 
@@ -90,6 +97,14 @@ void app_main()
   Anchor A1 = {0.0, 0.0, 0.0};
   Anchor A2 = {100.0, 0.0, 0.0};
   Anchor A3 = {0.0, 100.0, 0.0};
+  // Motor Initialization
+  setup_pwm(SERVO1_PIN, LEDC_CHANNEL_0);
+  setup_pwm(SERVO2_PIN, LEDC_CHANNEL_1);
+
+  // while(1){
+  //   set_servo_speed(+80, LEDC_CHANNEL_0); // left
+  //   set_servo_speed(-70, LEDC_CHANNEL_1); // right
+  // }
 
   // WIFI
   nvs_flash_init();
