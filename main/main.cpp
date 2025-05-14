@@ -14,6 +14,35 @@ extern "C"
 #include "esp_log.h"
 }
 QueueHandle_t distance_queue;
+SemaphoreHandle_t mutex;
+QueueHandle_t sensor_data_queue;
+
+typedef enum
+{
+  DATA_TYPE_MPU6050,
+  DATA_TYPE_UWB
+} sensor_type_t;
+// unified structure for queue handling
+typedef struct
+{
+  sensor_type_t type;
+  union
+  {
+    struct
+    {
+      float roll;
+      float pitch;
+      float yaw;
+    } mpu;
+    struct
+    {
+      float x;
+      float y;
+      float z;
+    } uwb;
+  };
+} sensor_data_t;
+
 #define MPU_TAG "mpu6050_rpy"
 
 #define SERVO1_PIN GPIO_NUM_12
@@ -23,7 +52,7 @@ QueueHandle_t distance_queue;
 #define APP_NAME "SS TWR RESP v1.0"
 
 // connection pins
-const uint8_t PIN_RST = 21; // reset pin
+const uint8_t PIN_RST = 26; // reset pin
 const uint8_t PIN_IRQ = 4;  // irq pin
 const uint8_t PIN_SS = 5;   // spi select pin
 
@@ -93,192 +122,282 @@ extern dwt_txconfig_t txconfig_options;
   Tasks Creation
 */
 // Motor Task
-void servo_task(void *param){
-  while(1){
-    set_servo_speed(+80, LEDC_CHANNEL_0); // left
-    set_servo_speed(-70, LEDC_CHANNEL_1); // right
-    vTaskDelay(pdMS_TO_TICKS(20));
+void servo_motor_task(void *param)
+{
+  // set_servo_speed(+80, LEDC_CHANNEL_0); // left
+  // set_servo_speed(-70, LEDC_CHANNEL_1); // right
+  while (1)
+  {
+    if (xSemaphoreTake(mutex, pdMS_TO_TICKS(100)))
+    {
+      printf("mutex taken by servo_task\n");
+      printf("Running Two Servos\n");
+
+      // Control code here (e.g., pwm set)
+      // ...
+
+      xSemaphoreGive(mutex);
+      printf("mutex released by servo_task\n");
+    }
+    else
+    {
+      printf("Servo reading timed out\n");
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(40)); // ~50 Hz
   }
 }
 
-// MPU6050 Task
-void mpu6050_rpy_task(void * params){
-    esp_err_t ret;
-    uint8_t mpu6050_deviceid;
-    mpu6050_acce_value_t acce;
-    mpu6050_gyro_value_t gyro;
+// === TASK: MPU6050 Orientation Task ===
+void mpu6050_rpy_task(void *params)
+{
+  esp_err_t ret;
+  uint8_t mpu6050_deviceid;
+  mpu6050_acce_value_t acce;
+  mpu6050_gyro_value_t gyro;
 
-    float roll = 0.0f, pitch = 0.0f, yaw = 0.0f;
-    const float dt = 0.1f; // 100ms
+  float roll = 0.0f, pitch = 0.0f, yaw = 0.0f;
+  int64_t last_time = esp_timer_get_time(); // μs
 
-    ret = mpu6050_get_deviceid(mpu6050, &mpu6050_deviceid);
-    TEST_ASSERT_EQUAL(ESP_OK, ret);
-    TEST_ASSERT_EQUAL_UINT8_MESSAGE(MPU6050_WHO_AM_I_VAL, mpu6050_deviceid, "Wrong WHO_AM_I");
+  ret = mpu6050_get_deviceid(mpu6050, &mpu6050_deviceid);
+  TEST_ASSERT_EQUAL(ESP_OK, ret);
+  TEST_ASSERT_EQUAL_UINT8_MESSAGE(MPU6050_WHO_AM_I_VAL, mpu6050_deviceid, "Wrong WHO_AM_I");
 
-    TickType_t last_wake = xTaskGetTickCount();
-    while (1) {
-        ret = mpu6050_get_acce(mpu6050, &acce);
-        TEST_ASSERT_EQUAL(ESP_OK, ret);
+  while (1)
+  {
+    if (xSemaphoreTake(mutex, pdMS_TO_TICKS(200))) // longer window for MPU read
+    {
+      printf("mutex taken by mpu6050_task\n");
+      int64_t now = esp_timer_get_time();        // in μs
+      float dt = (now - last_time) / 1000000.0f; // seconds
+      last_time = now;
 
-        ret = mpu6050_get_gyro(mpu6050, &gyro);
-        TEST_ASSERT_EQUAL(ESP_OK, ret);
+      ret = mpu6050_get_acce(mpu6050, &acce);
+      TEST_ASSERT_EQUAL(ESP_OK, ret);
 
-        // --- Accelerometer-based Roll & Pitch ---
-        float accel_roll  = atan2f(acce.acce_y, acce.acce_z) * 180.0f / M_PI;
-        float accel_pitch = atan2f(-acce.acce_x, sqrtf(acce.acce_y * acce.acce_y + acce.acce_z * acce.acce_z)) * 180.0f / M_PI;
+      ret = mpu6050_get_gyro(mpu6050, &gyro);
+      TEST_ASSERT_EQUAL(ESP_OK, ret);
 
-        // --- Gyroscope rates (degrees per second) ---
-        float gyro_roll_rate  = gyro.gyro_x;
-        float gyro_pitch_rate = gyro.gyro_y;
-        float gyro_yaw_rate   = gyro.gyro_z;
+      // Compute accelerometer-based Roll & Pitch
+      float accel_roll = atan2f(acce.acce_y, acce.acce_z) * 180.0f / M_PI;
+      float accel_pitch = atan2f(-acce.acce_x, sqrtf(acce.acce_y * acce.acce_y + acce.acce_z * acce.acce_z)) * 180.0f / M_PI;
 
-        // --- Complementary Filter for Roll and Pitch ---
-        roll  = ALPHA * (roll + gyro_roll_rate * dt) + (1.0f - ALPHA) * accel_roll;
-        pitch = ALPHA * (pitch + gyro_pitch_rate * dt) + (1.0f - ALPHA) * accel_pitch;
+      // Gyroscope rate
+      float gyro_roll_rate = gyro.gyro_x;
+      float gyro_pitch_rate = gyro.gyro_y;
+      float gyro_yaw_rate = gyro.gyro_z;
 
-        // --- Yaw Integration (no correction without magnetometer) ---
-        yaw += gyro_yaw_rate * dt;
+      // Complementary filter
+      roll = ALPHA * (roll + gyro_roll_rate * dt) + (1.0f - ALPHA) * accel_roll;
+      pitch = ALPHA * (pitch + gyro_pitch_rate * dt) + (1.0f - ALPHA) * accel_pitch;
 
-        // Keep yaw within 0-360
-        if (yaw >= 360.0f) yaw -= 360.0f;
-        if (yaw < 0.0f) yaw += 360.0f;
+      // Yaw integration
+      yaw += gyro_yaw_rate * dt;
+      if (yaw >= 360.0f)
+        yaw -= 360.0f;
+      if (yaw < 0.0f)
+        yaw += 360.0f;
 
-        char payload[128];
-        snprintf(payload, sizeof(payload),"{\"roll\": %.2f, \"pitch\": %.2f, \"yaw\": %.2f}", roll, pitch, yaw);
-        mqtt_send("masterBOT/data", payload);
+      ESP_LOGI(MPU_TAG, "Roll: %.2f°, Pitch: %.2f°, Yaw: %.2f°, dt=%.3fs", roll, pitch, yaw, dt);
 
-        // vTaskDelay(pdMS_TO_TICKS(dt * 1000));
-        vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(100));
+      // sending it to queue
+      sensor_data_t data;
+      data.type = DATA_TYPE_MPU6050;
+      data.mpu.roll = roll;
+      data.mpu.pitch = pitch;
+      data.mpu.yaw = yaw;
+      if (xQueueSend(sensor_data_queue, &data, pdMS_TO_TICKS(20)))
+      {
+        printf("MPU6050 data sent to queue\n");
+      }
+      else
+      {
+        printf("failed to send mpu6050 data to queue\n");
+      }
+      xSemaphoreGive(mutex);
+      printf("mutex releassed by mpu6050_task\n");
+    }
+    else
+    {
+      ESP_LOGW(MPU_TAG, "MPU6050 reading timed out");
     }
 
-    // mpu6050_delete(mpu6050);
-    // ret = i2c_driver_delete(I2C_MASTER_NUM);
-    // TEST_ASSERT_EQUAL(ESP_OK, ret);
-    // vTaskDelete(NULL);
+    vTaskDelay(pdMS_TO_TICKS(100)); // ~10 Hz
+  }
+
+  mpu6050_delete(mpu6050);
+  i2c_driver_delete(I2C_MASTER_NUM);
+  vTaskDelete(NULL);
 }
 
 // UWB_Task
-void uwb_task(void * params){
-  TickType_t last_wake = xTaskGetTickCount();
+void uwb_task(void *params)
+{
+  // TickType_t last_wake = xTaskGetTickCount();
   while (1)
   {
-    /* Activate reception immediately. */
-    dwt_rxenable(DWT_START_RX_IMMEDIATE);
-
-    /* Poll for reception of a frame or error/timeout. See NOTE 6 below. */
-    while (!((status_reg = dwt_read32bitreg(SYS_STATUS_ID)) & (SYS_STATUS_RXFCG_BIT_MASK | SYS_STATUS_ALL_RX_ERR)))
+    if (xSemaphoreTake(mutex, pdMS_TO_TICKS(500)))
     {
-    }
+      printf("mutex taken by uwb_task\n");
+      /* Activate reception immediately. */
+      dwt_rxenable(DWT_START_RX_IMMEDIATE);
 
-    if (status_reg & SYS_STATUS_RXFCG_BIT_MASK)
-    {
-      uint32_t frame_len;
-
-      /* Clear good RX frame event in the DW IC status register. */
-      dwt_write32bitreg(SYS_STATUS_ID, SYS_STATUS_RXFCG_BIT_MASK);
-
-      /* A frame has been received, read it into the local buffer. */
-      frame_len = dwt_read32bitreg(RX_FINFO_ID) & RXFLEN_MASK;
-      if (frame_len <= sizeof(rx_buffer))
+      /* Poll for reception of a frame or error/timeout. See NOTE 6 below. */
+      while (!((status_reg = dwt_read32bitreg(SYS_STATUS_ID)) & (SYS_STATUS_RXFCG_BIT_MASK | SYS_STATUS_ALL_RX_ERR)))
       {
-        dwt_readrxdata(rx_buffer, frame_len, 0);
+      }
 
-        /* Check that the frame is a poll sent by "SS TWR initiator" example.
-         * As the sequence number field of the frame is not relevant, it is cleared to simplify the validation of the frame. */
-        rx_buffer[ALL_MSG_SN_IDX] = 0;
-        if (memcmp(rx_buffer, rx_poll_msg, ALL_MSG_COMMON_LEN) == 0)
+      if (status_reg & SYS_STATUS_RXFCG_BIT_MASK)
+      {
+        uint32_t frame_len;
+
+        /* Clear good RX frame event in the DW IC status register. */
+        dwt_write32bitreg(SYS_STATUS_ID, SYS_STATUS_RXFCG_BIT_MASK);
+
+        /* A frame has been received, read it into the local buffer. */
+        frame_len = dwt_read32bitreg(RX_FINFO_ID) & RXFLEN_MASK;
+        if (frame_len <= sizeof(rx_buffer))
         {
-          uint32_t resp_tx_time;
-          int ret;
+          dwt_readrxdata(rx_buffer, frame_len, 0);
 
-          /* Retrieve poll reception timestamp. */
-          poll_rx_ts = get_rx_timestamp_u64();
-
-          /* Compute response message transmission time. See NOTE 7 below. */
-          resp_tx_time = (poll_rx_ts + (POLL_RX_TO_RESP_TX_DLY_UUS * UUS_TO_DWT_TIME)) >> 8;
-          dwt_setdelayedtrxtime(resp_tx_time);
-
-          /* Response TX timestamp is the transmission time we programmed plus the antenna delay. */
-          resp_tx_ts = (((uint64_t)(resp_tx_time & 0xFFFFFFFEUL)) << 8) + TX_ANT_DLY;
-
-          /* Write all timestamps in the final message. See NOTE 8 below. */
-          resp_msg_set_ts(&tx_resp_msg[RESP_MSG_POLL_RX_TS_IDX], poll_rx_ts);
-          resp_msg_set_ts(&tx_resp_msg[RESP_MSG_RESP_TX_TS_IDX], resp_tx_ts);
-
-          /* Write and send the response message. See NOTE 9 below. */
-          tx_resp_msg[ALL_MSG_SN_IDX] = frame_seq_nb;
-          dwt_writetxdata(sizeof(tx_resp_msg), tx_resp_msg, 0); /* Zero offset in TX buffer. */
-          dwt_writetxfctrl(sizeof(tx_resp_msg), 0, 1);          /* Zero offset in TX buffer, ranging. */
-          ret = dwt_starttx(DWT_START_TX_DELAYED);
-          printf("ret = %d\n", ret);
-          /* If dwt_starttx() returns an error, abandon this ranging exchange and proceed to the next one. See NOTE 10 below. */
-          if (ret == DWT_SUCCESS)
+          /* Check that the frame is a poll sent by "SS TWR initiator" example.
+           * As the sequence number field of the frame is not relevant, it is cleared to simplify the validation of the frame. */
+          rx_buffer[ALL_MSG_SN_IDX] = 0;
+          if (memcmp(rx_buffer, rx_poll_msg, ALL_MSG_COMMON_LEN) == 0)
           {
-            /* Poll DW IC until TX frame sent event set. See NOTE 6 below. */
-            while (!(dwt_read32bitreg(SYS_STATUS_ID) & SYS_STATUS_TXFRS_BIT_MASK))
+            uint32_t resp_tx_time;
+            int ret;
+
+            /* Retrieve poll reception timestamp. */
+            poll_rx_ts = get_rx_timestamp_u64();
+
+            /* Compute response message transmission time. See NOTE 7 below. */
+            resp_tx_time = (poll_rx_ts + (POLL_RX_TO_RESP_TX_DLY_UUS * UUS_TO_DWT_TIME)) >> 8;
+            dwt_setdelayedtrxtime(resp_tx_time);
+
+            /* Response TX timestamp is the transmission time we programmed plus the antenna delay. */
+            resp_tx_ts = (((uint64_t)(resp_tx_time & 0xFFFFFFFEUL)) << 8) + TX_ANT_DLY;
+
+            /* Write all timestamps in the final message. See NOTE 8 below. */
+            resp_msg_set_ts(&tx_resp_msg[RESP_MSG_POLL_RX_TS_IDX], poll_rx_ts);
+            resp_msg_set_ts(&tx_resp_msg[RESP_MSG_RESP_TX_TS_IDX], resp_tx_ts);
+
+            /* Write and send the response message. See NOTE 9 below. */
+            tx_resp_msg[ALL_MSG_SN_IDX] = frame_seq_nb;
+            dwt_writetxdata(sizeof(tx_resp_msg), tx_resp_msg, 0); /* Zero offset in TX buffer. */
+            dwt_writetxfctrl(sizeof(tx_resp_msg), 0, 1);          /* Zero offset in TX buffer, ranging. */
+            ret = dwt_starttx(DWT_START_TX_DELAYED);
+            printf("ret = %d\n", ret);
+            /* If dwt_starttx() returns an error, abandon this ranging exchange and proceed to the next one. See NOTE 10 below. */
+            if (ret == DWT_SUCCESS)
             {
-            };
+              /* Poll DW IC until TX frame sent event set. See NOTE 6 below. */
+              while (!(dwt_read32bitreg(SYS_STATUS_ID) & SYS_STATUS_TXFRS_BIT_MASK))
+              {
+              };
 
-            /* Clear TXFRS event. */
-            dwt_write32bitreg(SYS_STATUS_ID, SYS_STATUS_TXFRS_BIT_MASK);
+              /* Clear TXFRS event. */
+              dwt_write32bitreg(SYS_STATUS_ID, SYS_STATUS_TXFRS_BIT_MASK);
 
-            /* Increment frame sequence number after transmission of the poll message (modulo 256). */
-            frame_seq_nb++;
+              /* Increment frame sequence number after transmission of the poll message (modulo 256). */
+              frame_seq_nb++;
 
-            // double distance;
-            uwb_distances_t distances;
+              // double distance;
+              uwb_distances_t distances;
               Anchor A1 = {0.0, 0.0, 0.0};
               Anchor A2 = {100.0, 0.0, 0.0};
               Anchor A3 = {0.0, 100.0, 0.0};
 
-            if (xQueueReceive(uwb_distances_queue, &distances, pdMS_TO_TICKS(50)))
-            {
-              printf("Anchor A1: %.2f cm\n", distances.A1);
-              printf("Anchor A2: %.2f cm\n", distances.A2);
-              printf("Anchor A3: %.2f cm\n", distances.A3);
-
-              // Update measured distances
-              A1.distance = distances.A1;
-              A2.distance = distances.A2;
-              A3.distance = distances.A3;
-
-              Position result;
-              if (trilateration(A1, A2, A3, result))
+              if (xQueueReceive(uwb_distances_queue, &distances, pdMS_TO_TICKS(50)))
               {
-                printf("Robot Position X: %.2f cm, Y: %.2f cm, Z: %.2f cm\n", result.x, result.y, result.z);
+                printf("Anchor A1: %.2f cm\n", distances.A1);
+                printf("Anchor A2: %.2f cm\n", distances.A2);
+                printf("Anchor A3: %.2f cm\n", distances.A3);
 
-                // Format the position into a JSON string
-                char payload[128];
-                snprintf(payload, sizeof(payload),
-                         "{\"x\":%.2f,\"y\":%.2f,\"z\":%.2f}",
-                         result.x, result.y, result.z);
+                // Update measured distances
+                A1.distance = distances.A1;
+                A2.distance = distances.A2;
+                A3.distance = distances.A3;
 
-                // Send via MQTT to topic "robot/position"
-                mqtt_send("masterBOT/data", payload);
+                Position result;
+                if (trilateration(A1, A2, A3, result))
+                {
+                  printf("Robot Position X: %.2f cm, Y: %.2f cm, Z: %.2f cm\n", result.x, result.y, result.z);
+                  sensor_data_t data;
+                  data.type = DATA_TYPE_UWB;
+                  data.uwb.x = result.x;
+                  data.uwb.y = result.y;
+                  data.uwb.z = result.z;
+
+                  if (xQueueSend(sensor_data_queue, &data, pdMS_TO_TICKS(50)))
+                  {
+                    printf("UWB data sent to queue\n");
+
+                  }
+                  else
+                  {
+                    printf("Failed to send UWB to queue\n");
+                  }
+                }
+                else
+                {
+                  printf("Trilateration failed — possible colinear anchors or bad distances.\n");
+                }
+
+                // vTaskDelay(pdMS_TO_TICKS(100)); // Optional delay
               }
               else
               {
-                printf("Trilateration failed — possible colinear anchors or bad distances.\n");
+                                          xSemaphoreGive(mutex);
+                          printf("mutex released by uwb_task\n");
+                printf("No queue Received\n");
               }
-
-              // vTaskDelay(pdMS_TO_TICKS(100)); // Optional delay
-            }
-            else
-            {
-              printf("No queue Received\n");
             }
           }
         }
       }
+      else
+      {
+        /* Clear RX error events in the DW IC status register. */
+        dwt_write32bitreg(SYS_STATUS_ID, SYS_STATUS_ALL_RX_ERR);
+      }
+
+      // vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(100));
+      vTaskDelay(pdMS_TO_TICKS(40));
     }
-    else
-    {
-      /* Clear RX error events in the DW IC status register. */
-      dwt_write32bitreg(SYS_STATUS_ID, SYS_STATUS_ALL_RX_ERR);
-    }
-    vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(500));
   }
 }
+
+// Task to send message
+void test_send_messages(void *params)
+{
+  sensor_data_t data;
+
+  while (1)
+  {
+    if (xQueueReceive(sensor_data_queue, &data, portMAX_DELAY))
+    {
+      char json_payload[128];
+
+      if (data.type == DATA_TYPE_UWB)
+      {
+        snprintf(json_payload, sizeof(json_payload),
+                 "{\"type\": \"UWB\", \"x\": %.2f, \"y\": %.2f, \"z\": %.2f}",
+                 data.uwb.x, data.uwb.y, data.uwb.z);
+      }
+      else if (data.type == DATA_TYPE_MPU6050)
+      {
+        snprintf(json_payload, sizeof(json_payload),
+                 "{\"type\": \"MPU6050\", \"roll\": %.2f, \"pitch\": %.2f, \"yaw\": %.2f}",
+                 data.mpu.roll, data.mpu.pitch, data.mpu.yaw);
+      }
+
+      mqtt_send("masterBOT/data", json_payload);
+      printf("Published JSON: %s\n", json_payload);
+    }
+  }
+}
+
 extern "C"
 {
   void app_main();
@@ -287,6 +406,8 @@ extern "C"
 void app_main()
 {
   uwb_distances_queue = xQueueCreate(5, sizeof(uwb_distances_t));
+  mutex = xSemaphoreCreateMutex();                             // create mutex
+  sensor_data_queue = xQueueCreate(20, sizeof(sensor_data_t)); // creating queue
   // MPU6050 INIT
   mpu6050_init();
 
@@ -294,7 +415,7 @@ void app_main()
   // setup_pwm(MINI_SERVO_PIN, LEDC_CHANNEL_2);
   setup_pwm(SERVO1_PIN, LEDC_CHANNEL_0);
   setup_pwm(SERVO2_PIN, LEDC_CHANNEL_1);
-  vTaskDelay(pdMS_TO_TICKS(20000));
+  // vTaskDelay(pdMS_TO_TICKS(20000));
 
   // WIFI
   nvs_flash_init();
@@ -350,12 +471,13 @@ void app_main()
    * Note, in real low power applications the LEDs should not be used. */
   dwt_setlnapamode(DWT_LNA_ENABLE | DWT_PA_ENABLE);
 
-  vTaskDelay(pdMS_TO_TICKS(30000));
+  // vTaskDelay(pdMS_TO_TICKS(30000));
 
-  xTaskCreate(servo_task, "Servo Task", 2048, NULL, 5, NULL);
-  xTaskCreate(mpu6050_rpy_task, "MPU Task", 4*1024, NULL, 5, NULL);
-  xTaskCreate(uwb_task, "UWB Task", 1024*8, NULL, 5, NULL);
-
+  // All tasks
+  xTaskCreatePinnedToCore(uwb_task, "UWB Task", 1024 * 2, NULL, 5, NULL, 1);
+  xTaskCreatePinnedToCore(mpu6050_rpy_task, "MPU6050 Task", 1024 * 4, NULL, 4, NULL, 1);
+  xTaskCreatePinnedToCore(servo_motor_task, "Servo Task", 1024 * 2, NULL, 4, NULL, 0);
+  xTaskCreatePinnedToCore(test_send_messages, "MQTT Task", 1024 * 4, NULL, 3, NULL, 0);
 }
 
 /*****************************************************************************************************************************************************
