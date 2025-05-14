@@ -9,11 +9,17 @@ extern "C"
 #include "freertos/FreeRTOS.h"
 #include "driver/gpio.h"
 #include "servo_motor.h"
+#include "mpu6050_rpy.h"
+#include "unity.h"
+#include "esp_log.h"
 }
 QueueHandle_t distance_queue;
 
+#define MPU_TAG "mpu6050_rpy"
+
 #define SERVO1_PIN GPIO_NUM_12
 #define SERVO2_PIN GPIO_NUM_27
+// #define MINI_SERVO_PIN GPIO_NUM_14
 
 #define APP_NAME "SS TWR RESP v1.0"
 
@@ -84,81 +90,77 @@ static uint64_t resp_tx_ts;
 /* Values for the PG_DELAY and TX_POWER registers reflect the bandwidth and power of the spectrum at the current
  * temperature. These values can be calibrated prior to taking reference measurements. See NOTE 5 below. */
 extern dwt_txconfig_t txconfig_options;
-
-extern "C"
-{
-  void app_main();
+/*
+  Tasks Creation
+*/
+// Motor Task
+void servo_task(void *param){
+  while(1){
+    set_servo_speed(+80, LEDC_CHANNEL_0); // left
+    set_servo_speed(-70, LEDC_CHANNEL_1); // right
+    vTaskDelay(pdMS_TO_TICKS(20));
+  }
 }
 
-void app_main()
-{
-  uwb_distances_queue = xQueueCreate(5, sizeof(uwb_distances_t));
+// MPU6050 Task
+void mpu6050_rpy_task(void * params){
+    esp_err_t ret;
+    uint8_t mpu6050_deviceid;
+    mpu6050_acce_value_t acce;
+    mpu6050_gyro_value_t gyro;
 
-  Anchor A1 = {0.0, 0.0, 0.0};
-  Anchor A2 = {100.0, 0.0, 0.0};
-  Anchor A3 = {0.0, 100.0, 0.0};
-  // Motor Initialization
-  setup_pwm(SERVO1_PIN, LEDC_CHANNEL_0);
-  setup_pwm(SERVO2_PIN, LEDC_CHANNEL_1);
+    float roll = 0.0f, pitch = 0.0f, yaw = 0.0f;
+    const float dt = 0.1f; // 100ms
 
-  // while(1){
-  //   set_servo_speed(+80, LEDC_CHANNEL_0); // left
-  //   set_servo_speed(-70, LEDC_CHANNEL_1); // right
-  // }
+    ret = mpu6050_get_deviceid(mpu6050, &mpu6050_deviceid);
+    TEST_ASSERT_EQUAL(ESP_OK, ret);
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(MPU6050_WHO_AM_I_VAL, mpu6050_deviceid, "Wrong WHO_AM_I");
 
-  // WIFI
-  nvs_flash_init();
-  wifi_connect_init();
-  wifi_connect_sta("Nalim", "0123456789", 10000);
+    TickType_t last_wake = xTaskGetTickCount();
+    while (1) {
+        ret = mpu6050_get_acce(mpu6050, &acce);
+        TEST_ASSERT_EQUAL(ESP_OK, ret);
 
-  // MQTT
-  mqtt_start();
-  // delay(5000);
-  UART_init();
-  test_run_info((unsigned char *)APP_NAME);
+        ret = mpu6050_get_gyro(mpu6050, &gyro);
+        TEST_ASSERT_EQUAL(ESP_OK, ret);
 
-  /* Configure SPI rate, DW3000 supports up to 38 MHz */
-  /* Reset DW IC */
-  spiBegin(PIN_IRQ, PIN_RST);
-  spiSelect(PIN_SS);
+        // --- Accelerometer-based Roll & Pitch ---
+        float accel_roll  = atan2f(acce.acce_y, acce.acce_z) * 180.0f / M_PI;
+        float accel_pitch = atan2f(-acce.acce_x, sqrtf(acce.acce_y * acce.acce_y + acce.acce_z * acce.acce_z)) * 180.0f / M_PI;
 
-  delay(2); // Time needed for DW3000 to start up (transition from INIT_RC to IDLE_RC, or could wait for SPIRDY event)
+        // --- Gyroscope rates (degrees per second) ---
+        float gyro_roll_rate  = gyro.gyro_x;
+        float gyro_pitch_rate = gyro.gyro_y;
+        float gyro_yaw_rate   = gyro.gyro_z;
 
-  while (!dwt_checkidlerc()) // Need to make sure DW IC is in IDLE_RC before proceeding
-  {
-    UART_puts("IDLE FAILED\r\n");
-    while (1)
-      ;
-  }
+        // --- Complementary Filter for Roll and Pitch ---
+        roll  = ALPHA * (roll + gyro_roll_rate * dt) + (1.0f - ALPHA) * accel_roll;
+        pitch = ALPHA * (pitch + gyro_pitch_rate * dt) + (1.0f - ALPHA) * accel_pitch;
 
-  if (dwt_initialise(DWT_DW_INIT) == DWT_ERROR)
-  {
-    UART_puts("INIT FAILED\r\n");
-    while (1)
-      ;
-  }
+        // --- Yaw Integration (no correction without magnetometer) ---
+        yaw += gyro_yaw_rate * dt;
 
-  // Enabling LEDs here for debug so that for each TX the D1 LED will flash on DW3000 red eval-shield boards.
-  dwt_setleds(DWT_LEDS_ENABLE | DWT_LEDS_INIT_BLINK);
+        // Keep yaw within 0-360
+        if (yaw >= 360.0f) yaw -= 360.0f;
+        if (yaw < 0.0f) yaw += 360.0f;
 
-  /* Configure DW IC. See NOTE 6 below. */
-  if (dwt_configure(&config)) // if the dwt_configure returns DWT_ERROR either the PLL or RX calibration has failed the host should reset the device
-  {
-    UART_puts("CONFIG FAILED\r\n");
-    while (1)
-      ;
-  }
+        char payload[128];
+        snprintf(payload, sizeof(payload),"{\"roll\": %.2f, \"pitch\": %.2f, \"yaw\": %.2f}", roll, pitch, yaw);
+        mqtt_send("masterBOT/data", payload);
 
-  /* Configure the TX spectrum parameters (power, PG delay and PG count) */
-  dwt_configuretxrf(&txconfig_options);
+        // vTaskDelay(pdMS_TO_TICKS(dt * 1000));
+        vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(100));
+    }
 
-  /* Apply default antenna delay value. See NOTE 2 below. */
-  dwt_setrxantennadelay(RX_ANT_DLY);
-  dwt_settxantennadelay(TX_ANT_DLY);
+    // mpu6050_delete(mpu6050);
+    // ret = i2c_driver_delete(I2C_MASTER_NUM);
+    // TEST_ASSERT_EQUAL(ESP_OK, ret);
+    // vTaskDelete(NULL);
+}
 
-  /* Next can enable TX/RX states output on GPIOs 5 and 6 to help debug, and also TX/RX LEDs
-   * Note, in real low power applications the LEDs should not be used. */
-  dwt_setlnapamode(DWT_LNA_ENABLE | DWT_PA_ENABLE);
+// UWB_Task
+void uwb_task(void * params){
+  TickType_t last_wake = xTaskGetTickCount();
   while (1)
   {
     /* Activate reception immediately. */
@@ -226,6 +228,9 @@ void app_main()
 
             // double distance;
             uwb_distances_t distances;
+              Anchor A1 = {0.0, 0.0, 0.0};
+              Anchor A2 = {100.0, 0.0, 0.0};
+              Anchor A3 = {0.0, 100.0, 0.0};
 
             if (xQueueReceive(uwb_distances_queue, &distances, pdMS_TO_TICKS(50)))
             {
@@ -250,14 +255,14 @@ void app_main()
                          result.x, result.y, result.z);
 
                 // Send via MQTT to topic "robot/position"
-                mqtt_send("/masterBOT/position", payload);
+                mqtt_send("masterBOT/data", payload);
               }
               else
               {
                 printf("Trilateration failed — possible colinear anchors or bad distances.\n");
               }
 
-              vTaskDelay(pdMS_TO_TICKS(100)); // Optional delay
+              // vTaskDelay(pdMS_TO_TICKS(100)); // Optional delay
             }
             else
             {
@@ -272,7 +277,81 @@ void app_main()
       /* Clear RX error events in the DW IC status register. */
       dwt_write32bitreg(SYS_STATUS_ID, SYS_STATUS_ALL_RX_ERR);
     }
+    vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(100));
   }
+}
+extern "C"
+{
+  void app_main();
+}
+
+void app_main()
+{
+  uwb_distances_queue = xQueueCreate(5, sizeof(uwb_distances_t));
+
+  // MPU6050 INIT
+  mpu6050_init();
+
+  // Motor Initialization
+  // setup_pwm(MINI_SERVO_PIN, LEDC_CHANNEL_2);
+  setup_pwm(SERVO1_PIN, LEDC_CHANNEL_0);
+  setup_pwm(SERVO2_PIN, LEDC_CHANNEL_1);
+  vTaskDelay(pdMS_TO_TICKS(20000));
+
+  // WIFI
+  nvs_flash_init();
+  wifi_connect_init();
+  wifi_connect_sta("Nalim", "0123456789", 10000);
+
+  // MQTT
+  mqtt_start();
+  // delay(5000);
+  UART_init();
+  test_run_info((unsigned char *)APP_NAME);
+
+  /* Configure SPI rate, DW3000 supports up to 38 MHz */
+  /* Reset DW IC */
+  spiBegin(PIN_IRQ, PIN_RST);
+  spiSelect(PIN_SS);
+
+  delay(2); // Time needed for DW3000 to start up (transition from INIT_RC to IDLE_RC, or could wait for SPIRDY event)
+
+  while (!dwt_checkidlerc()) // Need to make sure DW IC is in IDLE_RC before proceeding
+  {
+    UART_puts("IDLE FAILED\r\n");
+    while (1)
+      ;
+  }
+
+  if (dwt_initialise(DWT_DW_INIT) == DWT_ERROR)
+  {
+    UART_puts("INIT FAILED\r\n");
+    while (1)
+      ;
+  }
+
+  // Enabling LEDs here for debug so that for each TX the D1 LED will flash on DW3000 red eval-shield boards.
+  dwt_setleds(DWT_LEDS_ENABLE | DWT_LEDS_INIT_BLINK);
+
+  /* Configure DW IC. See NOTE 6 below. */
+  if (dwt_configure(&config)) // if the dwt_configure returns DWT_ERROR either the PLL or RX calibration has failed the host should reset the device
+  {
+    UART_puts("CONFIG FAILED\r\n");
+    while (1)
+      ;
+  }
+
+  /* Configure the TX spectrum parameters (power, PG delay and PG count) */
+  dwt_configuretxrf(&txconfig_options);
+
+  /* Apply default antenna delay value. See NOTE 2 below. */
+  dwt_setrxantennadelay(RX_ANT_DLY);
+  dwt_settxantennadelay(TX_ANT_DLY);
+
+  /* Next can enable TX/RX states output on GPIOs 5 and 6 to help debug, and also TX/RX LEDs
+   * Note, in real low power applications the LEDs should not be used. */
+  dwt_setlnapamode(DWT_LNA_ENABLE | DWT_PA_ENABLE);
+
 }
 
 /*****************************************************************************************************************************************************
