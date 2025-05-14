@@ -14,7 +14,6 @@ extern "C"
 #include "esp_log.h"
 }
 QueueHandle_t distance_queue;
-
 #define MPU_TAG "mpu6050_rpy"
 
 #define SERVO1_PIN GPIO_NUM_12
@@ -277,7 +276,7 @@ void uwb_task(void * params){
       /* Clear RX error events in the DW IC status register. */
       dwt_write32bitreg(SYS_STATUS_ID, SYS_STATUS_ALL_RX_ERR);
     }
-    vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(100));
+    vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(500));
   }
 }
 extern "C"
@@ -288,7 +287,6 @@ extern "C"
 void app_main()
 {
   uwb_distances_queue = xQueueCreate(5, sizeof(uwb_distances_t));
-
   // MPU6050 INIT
   mpu6050_init();
 
@@ -351,6 +349,12 @@ void app_main()
   /* Next can enable TX/RX states output on GPIOs 5 and 6 to help debug, and also TX/RX LEDs
    * Note, in real low power applications the LEDs should not be used. */
   dwt_setlnapamode(DWT_LNA_ENABLE | DWT_PA_ENABLE);
+
+  vTaskDelay(pdMS_TO_TICKS(30000));
+
+  xTaskCreate(servo_task, "Servo Task", 2048, NULL, 5, NULL);
+  xTaskCreate(mpu6050_rpy_task, "MPU Task", 4*1024, NULL, 5, NULL);
+  xTaskCreate(uwb_task, "UWB Task", 1024*8, NULL, 5, NULL);
 
 }
 
